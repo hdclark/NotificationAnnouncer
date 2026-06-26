@@ -8,6 +8,28 @@ import org.junit.Test
 class NotificationPolicyTest {
 
     @Test
+    fun `deduplicates repeated notification blocks without removing repeated words`() {
+        val deduplicated = NotificationPolicy.deduplicateRepeatedBlocks(
+            listOf(
+                "Sale sale sale",
+                "Order shipped. Order shipped. Arrives today",
+                "Arrives today",
+            )
+        )
+
+        assertEquals("Sale sale sale. Order shipped. Arrives today", deduplicated)
+    }
+
+    @Test
+    fun `deduplicates repeated line blocks`() {
+        val deduplicated = NotificationPolicy.deduplicateRepeatedBlocks(
+            listOf("Message from Pat\nMessage from Pat\nCall back soon")
+        )
+
+        assertEquals("Message from Pat. Call back soon", deduplicated)
+    }
+
+    @Test
     fun `filters notification when any fragment matches case-insensitively`() {
         assertTrue(NotificationPolicy.shouldFilterByFragments("Foo", listOf("oo", "123")))
     }
