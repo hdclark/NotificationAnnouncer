@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">Notification Announcer</string>
+    <string name="service_label">Notification Announcer Service</string>
+    <string name="notification_access_title">Notification access</string>
+    <string name="notification_access_enabled">Notification listener access is enabled.</string>
+    <string name="notification_access_disabled">Notification listener access is disabled.</string>
+    <string name="open_notification_access">Open notification access settings</string>
+    <string name="exclude_filters_title">Exclude filters (case-insensitive fragments)</string>
+    <string name="filter_hint">Add fragment (for example: oo)</string>
+    <string name="add_filter">Add</string>
+    <string name="remove_filter_hint">Long press a filter to remove it.</string>
+    <string name="apps_title">Apps with non-silent notifications (most recent first)</string>
+    <string name="last_seen_template">Last notification: %1$s</string>
+    <string name="read_enabled">Read</string>
+    <string name="empty_filter_error">Enter a non-empty filter fragment.</string>
+</resources>
