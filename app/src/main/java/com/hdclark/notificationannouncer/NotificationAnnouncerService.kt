@@ -26,6 +26,7 @@ class NotificationAnnouncerService : NotificationListenerService(), TextToSpeech
     private var audioManager: AudioManager? = null
     private var activeFocusRequest: AudioFocusRequest? = null
     private var shouldResumeMusicAfterAnnouncement = false
+    private var pendingAnnouncementCount = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -45,6 +46,11 @@ class NotificationAnnouncerService : NotificationListenerService(), TextToSpeech
     override fun onListenerConnected() {
         super.onListenerConnected()
         updateControlNotification()
+    }
+
+    private fun updateControlNotification() {
+        ensureControlNotificationChannel(this)
+        startForeground(CONTROL_NOTIFICATION_ID, buildControlNotification(this))
     }
 
     override fun onInit(status: Int) {
@@ -100,36 +106,52 @@ class NotificationAnnouncerService : NotificationListenerService(), TextToSpeech
             putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
             putString(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC.toString())
         }
-        tts?.speak(announcement, TextToSpeech.QUEUE_ADD, params, UUID.randomUUID().toString())
+        val speakResult = tts?.speak(announcement, TextToSpeech.QUEUE_ADD, params, UUID.randomUUID().toString())
+        if (speakResult != TextToSpeech.SUCCESS) {
+            finishAnnouncementAudio()
+        }
     }
 
+    @Synchronized
     private fun beginAnnouncementAudio() {
         val manager = audioManager ?: return
-        shouldResumeMusicAfterAnnouncement = manager.isMusicActive
-        if (shouldResumeMusicAfterAnnouncement) {
-            manager.dispatchMediaKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE))
-            manager.dispatchMediaKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE))
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build()
-                )
-                .setOnAudioFocusChangeListener { }
-                .build()
-            if (manager.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-                activeFocusRequest = request
+        val isFirstQueuedAnnouncement = pendingAnnouncementCount == 0
+        pendingAnnouncementCount += 1
+
+        if (isFirstQueuedAnnouncement) {
+            shouldResumeMusicAfterAnnouncement = manager.isMusicActive
+            if (shouldResumeMusicAfterAnnouncement) {
+                manager.dispatchMediaKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE))
+                manager.dispatchMediaKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE))
             }
-        } else {
-            @Suppress("DEPRECATION")
-            manager.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    .setOnAudioFocusChangeListener { }
+                    .build()
+                if (manager.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                    activeFocusRequest = request
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                manager.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+            }
         }
     }
 
+    @Synchronized
     private fun finishAnnouncementAudio() {
+        if (pendingAnnouncementCount > 0) {
+            pendingAnnouncementCount -= 1
+        }
+        if (pendingAnnouncementCount > 0) return
+
         abandonAnnouncementAudioFocus()
         if (shouldResumeMusicAfterAnnouncement) {
             audioManager?.dispatchMediaKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_MEDIA_PLAY))
