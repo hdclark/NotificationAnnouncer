@@ -8,6 +8,7 @@ object NotificationSettingsStore {
     private const val KEY_DISABLED_PACKAGES = "disabled_packages"
     private const val KEY_EXCLUDE_FRAGMENTS = "exclude_fragments"
     private const val KEY_APP_LAST_SEEN = "app_last_seen"
+    private const val KEY_ANNOUNCEMENTS_ENABLED = "announcements_enabled"
 
     fun isPackageEnabled(context: Context, packageName: String): Boolean {
         return !loadDisabledPackages(context).contains(packageName)
@@ -21,6 +22,14 @@ object NotificationSettingsStore {
             disabled.add(packageName)
         }
         prefs(context).edit().putStringSet(KEY_DISABLED_PACKAGES, disabled).apply()
+    }
+
+    fun areAnnouncementsEnabled(context: Context): Boolean {
+        return prefs(context).getBoolean(KEY_ANNOUNCEMENTS_ENABLED, true)
+    }
+
+    fun setAnnouncementsEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_ANNOUNCEMENTS_ENABLED, enabled).apply()
     }
 
     fun getExcludeFragments(context: Context): List<String> {
