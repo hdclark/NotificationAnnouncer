@@ -73,6 +73,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         requestControlNotificationPermissionIfNeeded()
+        startAnnouncementControlService()
         refreshData()
     }
 
@@ -139,4 +140,12 @@ class MainActivity : AppCompatActivity() {
         val enabledListeners = Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
         return enabledListeners?.contains(packageName) == true
     }
+}
+
+
+private fun Context.startAnnouncementControlService() {
+    ContextCompat.startForegroundService(
+        this,
+        Intent(this, AnnouncementControlService::class.java),
+    )
 }

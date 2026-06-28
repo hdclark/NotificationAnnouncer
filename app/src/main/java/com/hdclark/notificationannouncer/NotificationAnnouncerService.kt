@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -13,6 +14,7 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
+import android.os.IBinder
 import androidx.core.content.ContextCompat
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
@@ -51,7 +53,6 @@ class NotificationAnnouncerService : NotificationListenerService(), TextToSpeech
             IntentFilter(ACTION_ANNOUNCEMENTS_TOGGLED),
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
-        startForeground(CONTROL_NOTIFICATION_ID, buildControlNotification(this))
     }
 
     override fun onDestroy() {
@@ -69,7 +70,10 @@ class NotificationAnnouncerService : NotificationListenerService(), TextToSpeech
 
     private fun updateControlNotification() {
         ensureControlNotificationChannel(this)
-        startForeground(CONTROL_NOTIFICATION_ID, buildControlNotification(this))
+        getSystemService(NotificationManager::class.java)?.notify(
+            CONTROL_NOTIFICATION_ID,
+            buildControlNotification(this),
+        )
     }
 
     override fun onInit(status: Int) {
@@ -242,15 +246,32 @@ class NotificationAnnouncerService : NotificationListenerService(), TextToSpeech
     }
 }
 
+class AnnouncementControlService : Service() {
+    override fun onCreate() {
+        super.onCreate()
+        ensureControlNotificationChannel(this)
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        startForeground(
+            NotificationAnnouncerService.CONTROL_NOTIFICATION_ID,
+            buildControlNotification(this),
+        )
+        return START_STICKY
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+}
+
 class AnnouncementToggleReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent?.action != NotificationAnnouncerService.ACTION_TOGGLE_ANNOUNCEMENTS) return
         val enabled = NotificationSettingsStore.areAnnouncementsEnabled(context)
         NotificationSettingsStore.setAnnouncementsEnabled(context, !enabled)
         ensureControlNotificationChannel(context)
-        context.getSystemService(NotificationManager::class.java)?.notify(
-            NotificationAnnouncerService.CONTROL_NOTIFICATION_ID,
-            buildControlNotification(context),
+        ContextCompat.startForegroundService(
+            context,
+            Intent(context, AnnouncementControlService::class.java),
         )
         context.sendBroadcast(Intent(NotificationAnnouncerService.ACTION_ANNOUNCEMENTS_TOGGLED).setPackage(context.packageName))
         context.sendBroadcast(Intent(NotificationAnnouncerService.ACTION_APP_LIST_UPDATED).setPackage(context.packageName))
