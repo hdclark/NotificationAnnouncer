@@ -7,11 +7,13 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
+import androidx.core.content.ContextCompat
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.speech.tts.TextToSpeech
@@ -28,18 +30,35 @@ class NotificationAnnouncerService : NotificationListenerService(), TextToSpeech
     private var shouldResumeMusicAfterAnnouncement = false
     private var pendingAnnouncementCount = 0
 
+    private val announcementToggleReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == ACTION_ANNOUNCEMENTS_TOGGLED &&
+                !NotificationSettingsStore.areAnnouncementsEnabled(this@NotificationAnnouncerService)
+            ) {
+                stopCurrentAnnouncements()
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         audioManager = getSystemService(AudioManager::class.java)
         ensureControlNotificationChannel(this)
         tts = TextToSpeech(this, this)
+        ContextCompat.registerReceiver(
+            this,
+            announcementToggleReceiver,
+            IntentFilter(ACTION_ANNOUNCEMENTS_TOGGLED),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
         startForeground(CONTROL_NOTIFICATION_ID, buildControlNotification(this))
     }
 
     override fun onDestroy() {
+        runCatching { unregisterReceiver(announcementToggleReceiver) }
         tts?.shutdown()
         tts = null
-        abandonAnnouncementAudioFocus()
+        stopCurrentAnnouncements()
         super.onDestroy()
     }
 
@@ -160,6 +179,13 @@ class NotificationAnnouncerService : NotificationListenerService(), TextToSpeech
         }
     }
 
+    @Synchronized
+    private fun stopCurrentAnnouncements() {
+        tts?.stop()
+        pendingAnnouncementCount = 0
+        finishAnnouncementAudio()
+    }
+
     private fun abandonAnnouncementAudioFocus() {
         val manager = audioManager ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -210,6 +236,7 @@ class NotificationAnnouncerService : NotificationListenerService(), TextToSpeech
     companion object {
         const val ACTION_APP_LIST_UPDATED = "com.hdclark.notificationannouncer.APP_LIST_UPDATED"
         const val ACTION_TOGGLE_ANNOUNCEMENTS = "com.hdclark.notificationannouncer.TOGGLE_ANNOUNCEMENTS"
+        const val ACTION_ANNOUNCEMENTS_TOGGLED = "com.hdclark.notificationannouncer.ANNOUNCEMENTS_TOGGLED"
         const val CONTROL_NOTIFICATION_CHANNEL_ID = "announcer_controls"
         const val CONTROL_NOTIFICATION_ID = 1001
     }
@@ -225,6 +252,7 @@ class AnnouncementToggleReceiver : BroadcastReceiver() {
             NotificationAnnouncerService.CONTROL_NOTIFICATION_ID,
             buildControlNotification(context),
         )
+        context.sendBroadcast(Intent(NotificationAnnouncerService.ACTION_ANNOUNCEMENTS_TOGGLED).setPackage(context.packageName))
         context.sendBroadcast(Intent(NotificationAnnouncerService.ACTION_APP_LIST_UPDATED).setPackage(context.packageName))
     }
 }
@@ -257,7 +285,7 @@ private fun buildControlNotification(context: Context): Notification {
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
     return NotificationCompat.Builder(context, NotificationAnnouncerService.CONTROL_NOTIFICATION_CHANNEL_ID)
-        .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+        .setSmallIcon(R.drawable.ic_notification_announcer)
         .setContentTitle(context.getString(R.string.control_notification_title))
         .setContentText(context.getString(if (enabled) R.string.announcements_on else R.string.announcements_off))
         .setOngoing(true)
