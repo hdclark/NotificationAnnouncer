@@ -1,13 +1,17 @@
 package com.hdclark.notificationannouncer
 
+import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.ArrayAdapter
 import android.widget.Toast
+import android.content.pm.PackageManager
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -17,6 +21,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var appSettingsAdapter: AppSettingsAdapter
     private lateinit var filterAdapter: ArrayAdapter<String>
+
+    private val requestNotificationPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { refreshData() }
 
     private val refreshReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -64,6 +72,8 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
         }
 
+        requestControlNotificationPermissionIfNeeded()
+        startAnnouncementControlService()
         refreshData()
     }
 
@@ -120,8 +130,22 @@ class MainActivity : AppCompatActivity() {
             getString(if (accessGranted) R.string.notification_access_enabled else R.string.notification_access_disabled)
     }
 
+    private fun requestControlNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
     private fun isNotificationAccessGranted(): Boolean {
         val enabledListeners = Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
         return enabledListeners?.contains(packageName) == true
     }
+}
+
+
+private fun Context.startAnnouncementControlService() {
+    ContextCompat.startForegroundService(
+        this,
+        Intent(this, AnnouncementControlService::class.java),
+    )
 }

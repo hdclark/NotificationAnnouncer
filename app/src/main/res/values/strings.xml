@@ -13,4 +13,11 @@
     <string name="last_seen_template">Last notification: %1$s</string>
     <string name="read_enabled">Read</string>
     <string name="empty_filter_error">Enter a non-empty filter fragment.</string>
+    <string name="control_notification_channel_name">Announcement controls</string>
+    <string name="control_notification_channel_description">Persistent controls for notification announcements.</string>
+    <string name="control_notification_title">Notification announcements</string>
+    <string name="announcements_on">Announcements are on</string>
+    <string name="announcements_off">Announcements are paused</string>
+    <string name="pause_announcements">Pause</string>
+    <string name="resume_announcements">Resume</string>
 </resources>
