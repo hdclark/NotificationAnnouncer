@@ -8,12 +8,26 @@ data class AppNotificationRecord(
 object NotificationPolicy {
     fun deduplicateRepeatedBlocks(parts: List<String>): String {
         val seen = linkedSetOf<String>()
-        return parts
+        val uniqueBlocks = parts
             .flatMap { splitIntoBlocks(it) }
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .filter { seen.add(normalizeBlock(it)) }
-            .joinToString(". ")
+
+        return joinAnnouncementBlocks(uniqueBlocks)
+    }
+
+    private fun joinAnnouncementBlocks(blocks: List<String>): String {
+        return blocks.mapIndexed { index, block ->
+            val separator = if (index == blocks.lastIndex) {
+                ""
+            } else if (block.lastOrNull() in setOf('.', '!', '?')) {
+                " "
+            } else {
+                ". "
+            }
+            "$block$separator"
+        }.joinToString("")
     }
 
     private fun splitIntoBlocks(text: String): List<String> {
@@ -21,7 +35,7 @@ object NotificationPolicy {
         val sourceBlocks = if (lineBlocks.size > 1) lineBlocks else listOf(text.trim())
         return sourceBlocks.flatMap { block ->
             block.split(Regex("(?<=[.!?])\\s+"))
-                .map { it.trim().trimEnd('.', '!', '?') }
+                .map { it.trim() }
                 .filter { it.isNotEmpty() }
         }
     }

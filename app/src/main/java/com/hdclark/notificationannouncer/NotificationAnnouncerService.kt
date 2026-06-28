@@ -97,13 +97,13 @@ class NotificationAnnouncerService : NotificationListenerService(), TextToSpeech
     override fun onNotificationPosted(sbn: StatusBarNotification?, rankingMap: RankingMap?) {
         if (sbn == null) return
         if (sbn.packageName == packageName) return
-        if (!NotificationSettingsStore.areAnnouncementsEnabled(this)) return
         if (!isNonSilent(sbn, rankingMap)) return
 
         NotificationSettingsStore.updateAppLastSeen(this, sbn.packageName, System.currentTimeMillis())
         sendBroadcast(Intent(ACTION_APP_LIST_UPDATED).setPackage(packageName))
 
         if (!NotificationSettingsStore.isPackageEnabled(this, sbn.packageName)) return
+        if (!NotificationSettingsStore.areAnnouncementsEnabled(this)) return
 
         val spokenText = extractNotificationText(sbn.notification)
         if (spokenText.isBlank()) return
@@ -123,7 +123,7 @@ class NotificationAnnouncerService : NotificationListenerService(), TextToSpeech
         val announcement = "Announcement. $appLabel. $spokenText"
         val params = Bundle().apply {
             putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
-            putString(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC.toString())
+            putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
         }
         val speakResult = tts?.speak(announcement, TextToSpeech.QUEUE_ADD, params, UUID.randomUUID().toString())
         if (speakResult != TextToSpeech.SUCCESS) {

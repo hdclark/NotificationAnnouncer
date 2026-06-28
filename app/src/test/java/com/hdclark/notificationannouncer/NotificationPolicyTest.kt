@@ -30,6 +30,15 @@ class NotificationPolicyTest {
     }
 
     @Test
+    fun `preserves punctuation while deduplicating repeated blocks`() {
+        val deduplicated = NotificationPolicy.deduplicateRepeatedBlocks(
+            listOf("Are you coming? Are you coming? Yes!")
+        )
+
+        assertEquals("Are you coming? Yes!", deduplicated)
+    }
+
+    @Test
     fun `filters notification when any fragment matches case-insensitively`() {
         assertTrue(NotificationPolicy.shouldFilterByFragments("Foo", listOf("oo", "123")))
     }
