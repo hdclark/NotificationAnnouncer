@@ -94,6 +94,13 @@ class MainActivity : AppCompatActivity() {
             true
         }
 
+        binding.testSpeechButton.setOnClickListener {
+            sendBroadcast(
+                Intent(NotificationAnnouncerService.ACTION_TEST_ANNOUNCEMENT).setPackage(packageName)
+            )
+            Toast.makeText(this, R.string.test_speech_button, Toast.LENGTH_SHORT).show()
+        }
+
         binding.notificationAccessButton.setOnClickListener {
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
         }
@@ -125,6 +132,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshData() {
+        binding.speechStatus.text = NotificationSettingsStore.getSpeechStatus(this)
         val packageManager = packageManager
         val appStates = NotificationSettingsStore.getAppLastSeen(this)
 
