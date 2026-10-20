@@ -251,7 +251,9 @@ class NotificationAnnouncerService : NotificationListenerService(), TextToSpeech
         activeFocusRequest = request
         // Idempotent PAUSE, never the PLAY_PAUSE toggle. Some media players do not
         // pause reliably on transient focus loss alone.
-        if (announcements.musicWasPlaying) dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
+        if (announcements.musicWasPlaying ||
+            NotificationSettingsStore.getMusicResumeMode(this) != MusicResumeMode.AUTOMATIC
+        ) dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
         return true
     }
 
