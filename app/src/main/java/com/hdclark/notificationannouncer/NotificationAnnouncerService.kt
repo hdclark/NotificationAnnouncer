@@ -440,7 +440,7 @@ class NotificationAnnouncerService : NotificationListenerService() {
         applyPlaybackResumeMode(announcements.musicWasPlaying)
         announcements.cancel()
         engineFailureCount = 0
-        reportStatus("Ready to announce notifications")
+        reportStatus(if (ttsReady) "Ready to announce notifications" else "Speech engine unavailable; the next notification will trigger recovery")
     }
 
     private fun applyPlaybackResumeMode(wasMusicPlaying: Boolean) {
