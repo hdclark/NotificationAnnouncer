@@ -345,7 +345,7 @@ class NotificationAnnouncerService : NotificationListenerService() {
 
     private fun startNextAnnouncement() {
         if (destroyed || !announcements.hasQueued || announcements.isSpeaking || !ttsReady) return
-val remaining = AnnouncementTiming.waitBeforeSpeaking(
+        val remaining = AnnouncementTiming.waitBeforeSpeaking(
             firstNotificationUptime, lastNotificationUptime, SystemClock.uptimeMillis(),
             NOTIFICATION_QUIET_MS, MAX_QUIET_WAIT_MS,
         )
