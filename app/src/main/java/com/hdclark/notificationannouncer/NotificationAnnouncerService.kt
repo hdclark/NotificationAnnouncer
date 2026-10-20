@@ -43,6 +43,7 @@ class NotificationAnnouncerService : NotificationListenerService() {
     private var activeFocusRequest: AudioFocusRequest? = null
     private var focusGeneration = 0
     private var audioPrepared = false
+    private var suppressAutomaticResume = false
     private var lastNotificationUptime = 0L
 
     // Everything touching the queue, focus, or TTS state runs on the main looper.
@@ -315,7 +316,8 @@ class NotificationAnnouncerService : NotificationListenerService() {
     }
 
     private fun queueAnnouncement(text: String) {
-        announcements.enqueue(text, audioManager?.isMusicActive == true)
+        val firstInBurst = announcements.enqueue(text, audioManager?.isMusicActive == true)
+        if (firstInBurst) suppressAutomaticResume = false
         lastNotificationUptime = SystemClock.uptimeMillis()
         reportStatus("Announcement queued (${announcements.queuedCount} waiting)")
         if (!ttsReady && tts == null && !engineRestartScheduled) {
@@ -386,8 +388,20 @@ class NotificationAnnouncerService : NotificationListenerService() {
             if (change == AudioManager.AUDIOFOCUS_LOSS) {
                 mainHandler.post {
                     if (!destroyed && session == focusGeneration && activeFocusRequest != null) {
-                        stopCurrentAnnouncements(restorePlayback = false)
-                        reportStatus("Speech stopped: another app permanently took audio focus")
+                        if (audioManager?.mode == AudioManager.MODE_IN_CALL ||
+                            audioManager?.mode == AudioManager.MODE_IN_COMMUNICATION
+                        ) {
+                            stopCurrentAnnouncements(restorePlayback = false)
+                            reportStatus("Speech stopped for a call or communication session")
+                        } else {
+                            // Do not throw away speech simply because another application
+                            // took focus. Continue the existing TTS request in best-effort
+                            // mode, and let its watchdog recover if audio output stalls.
+                            abandonAnnouncementAudioFocus()
+                            audioPrepared = true
+                            suppressAutomaticResume = true
+                            reportStatus("Audio focus lost; continuing speech without focus")
+                        }
                     }
                 }
             }
@@ -439,6 +453,7 @@ class NotificationAnnouncerService : NotificationListenerService() {
         if (announcements.isSpeaking || announcements.hasQueued || !announcements.sessionOpen) return
         applyPlaybackResumeMode(announcements.musicWasPlaying)
         announcements.cancel()
+        suppressAutomaticResume = false
         engineFailureCount = 0
         reportStatus(if (ttsReady) "Ready to announce notifications" else "Speech engine unavailable; the next notification will trigger recovery")
     }
@@ -448,7 +463,7 @@ class NotificationAnnouncerService : NotificationListenerService() {
             MusicResumeMode.ALWAYS -> dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
             MusicResumeMode.NEVER -> dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
             MusicResumeMode.AUTOMATIC -> {
-                if (wasMusicPlaying && audioManager?.isMusicActive != true) {
+                if (!suppressAutomaticResume && wasMusicPlaying && audioManager?.isMusicActive != true) {
                     dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
                 }
             }
@@ -467,6 +482,7 @@ class NotificationAnnouncerService : NotificationListenerService() {
         abandonAnnouncementAudioFocus()
         audioPrepared = false
         if (hadSession && restorePlayback) applyPlaybackResumeMode(wasPlaying)
+        suppressAutomaticResume = false
     }
 
     private fun abandonAnnouncementAudioFocus() {
