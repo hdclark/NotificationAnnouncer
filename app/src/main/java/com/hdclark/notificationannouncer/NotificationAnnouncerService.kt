@@ -117,7 +117,7 @@ class NotificationAnnouncerService : NotificationListenerService() {
         reportStatus("Notification listener disconnected; requesting rebind")
         // Android will no longer deliver posted notifications until the listener reconnects.
         // Rebinding is explicitly permitted by NotificationListenerService at this point.
-        requestRebind(ComponentName(this, NotificationAnnouncerService::class.java))
+        NotificationListenerService.requestRebind(ComponentName(this, NotificationAnnouncerService::class.java))
         super.onListenerDisconnected()
     }
 
