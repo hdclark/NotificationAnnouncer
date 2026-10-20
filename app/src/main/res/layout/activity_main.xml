@@ -29,6 +29,25 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="16dp"
+        android:text="@string/music_resume_mode_title"
+        android:textStyle="bold" />
+
+    <Spinner
+        android:id="@+id/musicResumeModeSpinner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:contentDescription="@string/music_resume_mode_title"
+        android:entries="@array/music_resume_mode_options" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/music_resume_mode_description" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
         android:text="@string/exclude_filters_title"
         android:textStyle="bold" />
 
