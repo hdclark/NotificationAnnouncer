@@ -1,13 +1,16 @@
 package com.hdclark.notificationannouncer
 
 /**
- * One logical announcement burst owns the playback decision. Only a single utterance may
- * be submitted to TTS at once; callbacks for stale/cancelled utterances are ignored.
- * This model has no Android dependencies so burst and completion ordering can be tested.
+ * One burst owns the playback decision; exactly one utterance can be in flight.
+ * A retry is returned to the *front* of the queue to preserve announcement order.
+ * All access is serialized on the main looper by NotificationAnnouncerService.
  */
 class AnnouncementPlaybackQueue {
-    private val queued = ArrayDeque<String>()
-    private var activeId: String? = null
+    private data class Item(val text: String, val retries: Int = 0)
+    private val queued = ArrayDeque<Item>()
+    private var active: Item? = null
+    var activeUtteranceId: String? = null
+        private set
 
     var sessionOpen: Boolean = false
         private set
@@ -16,9 +19,11 @@ class AnnouncementPlaybackQueue {
     private var speechStarted: Boolean = false
 
     val hasQueued: Boolean get() = queued.isNotEmpty()
-    val isSpeaking: Boolean get() = activeId != null
+    val queuedCount: Int get() = queued.size
+    val isSpeaking: Boolean get() = activeUtteranceId != null
+    val activeTextLength: Int get() = active?.text?.length ?: 0
 
-    /** Returns true if this starts a new playback session. */
+    /** True if this is the first announcement of a burst. Bounded queue avoids OOM. */
     fun enqueue(announcement: String, musicActive: Boolean): Boolean {
         val first = !sessionOpen
         if (first) {
@@ -28,35 +33,57 @@ class AnnouncementPlaybackQueue {
         } else {
             observeMusicBeforeSpeech(musicActive)
         }
-        queued.addLast(announcement)
+        if (queued.size >= MAX_QUEUED) queued.removeFirst()
+        queued.addLast(Item(announcement))
         return first
     }
 
-    /** Latch any media detected before our own TTS can contaminate isMusicActive. */
     fun observeMusicBeforeSpeech(musicActive: Boolean) {
         if (sessionOpen && !speechStarted) musicWasPlaying = musicWasPlaying || musicActive
     }
 
     fun startNext(utteranceId: String): String? {
         if (!sessionOpen || isSpeaking || queued.isEmpty()) return null
-        activeId = utteranceId
+        val next = queued.removeFirst()
+        active = next
+        activeUtteranceId = utteranceId
         speechStarted = true
-        return queued.removeFirst()
+        return next.text
     }
 
-    /** Returns false for late/duplicate callbacks from a previous utterance or session. */
     fun complete(utteranceId: String?): Boolean {
-        if (utteranceId == null || activeId != utteranceId) return false
-        activeId = null
+        if (utteranceId == null || activeUtteranceId != utteranceId) return false
+        activeUtteranceId = null
+        active = null
+        return true
+    }
+
+    /**
+     * Invalidate a failed utterance and allow only one retry for that message.
+     * Returns false when exhausted or when a callback is stale.
+     */
+    fun retry(utteranceId: String?): Boolean {
+        if (utteranceId == null || activeUtteranceId != utteranceId) return false
+        val failed = active
+        activeUtteranceId = null
+        active = null
+        if (failed == null || failed.retries >= MAX_RETRIES) return false
+        queued.addFirst(failed.copy(retries = failed.retries + 1))
         return true
     }
 
     fun cancel() {
         queued.clear()
-        activeId = null
+        active = null
+        activeUtteranceId = null
         sessionOpen = false
         musicWasPlaying = false
         speechStarted = false
+    }
+
+    companion object {
+        const val MAX_QUEUED = 40
+        const val MAX_RETRIES = 1
     }
 }
 
