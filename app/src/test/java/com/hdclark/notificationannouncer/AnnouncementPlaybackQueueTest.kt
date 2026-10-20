@@ -74,4 +74,44 @@ class AnnouncementPlaybackQueueTest {
         assertTrue(MusicResumeMode.ALWAYS.shouldResume(false))
         assertFalse(MusicResumeMode.NEVER.shouldResume(true))
     }
+    @Test
+    fun `watchdog recovery retries the failed utterance before later notifications`() {
+        val queue = AnnouncementPlaybackQueue()
+        queue.enqueue("first", true)
+        queue.enqueue("second", false)
+        assertEquals("first", queue.startNext("stuck-utterance"))
+        assertTrue(queue.retry("stuck-utterance"))
+        assertFalse(queue.isSpeaking)
+        assertEquals("first", queue.startNext("retry-utterance"))
+        assertFalse(queue.complete("stuck-utterance"))
+        assertTrue(queue.complete("retry-utterance"))
+        assertEquals("second", queue.startNext("next-id"))
+        assertTrue(queue.complete("next-id"))
+        assertTrue(queue.musicWasPlaying)
+    }
+
+    @Test
+    fun `a permanently broken utterance never blocks later ones`() {
+        val queue = AnnouncementPlaybackQueue()
+        queue.enqueue("broken", false)
+        queue.enqueue("healthy", false)
+        assertEquals("broken", queue.startNext("id-1"))
+        assertTrue(queue.retry("id-1"))
+        assertEquals("broken", queue.startNext("id-2"))
+        assertFalse(queue.retry("id-2"))
+        assertFalse(queue.isSpeaking)
+        assertEquals("healthy", queue.startNext("id-3"))
+        assertTrue(queue.complete("id-3"))
+    }
+
+    @Test
+    fun `queue is bounded under repeated incoming notification bursts`() {
+        val queue = AnnouncementPlaybackQueue()
+        for (index in 0..AnnouncementPlaybackQueue.MAX_QUEUED + 4) {
+            queue.enqueue("message $index", false)
+        }
+        assertEquals(AnnouncementPlaybackQueue.MAX_QUEUED, queue.queuedCount)
+        assertEquals("message 6", queue.startNext("first"))
+    }
+
 }
