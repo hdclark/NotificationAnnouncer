@@ -317,12 +317,13 @@ class NotificationAnnouncerService : NotificationListenerService() {
     }
 
     private fun queueAnnouncement(text: String) {
+        val firstPendingAnnouncement = !announcements.hasQueued
         val firstInBurst = announcements.enqueue(text, audioManager?.isMusicActive == true)
         lastNotificationUptime = SystemClock.uptimeMillis()
-        if (firstInBurst) {
-            suppressAutomaticResume = false
-            firstNotificationUptime = lastNotificationUptime
-        }
+        // Each new *pending group* gets its own bounded quiet window, even when
+        // previous announcements are still finishing in the same music session.
+        if (firstPendingAnnouncement) firstNotificationUptime = lastNotificationUptime
+        if (firstInBurst) suppressAutomaticResume = false
         reportStatus("Announcement queued (${announcements.queuedCount} waiting)")
         if (!ttsReady && tts == null && !engineRestartScheduled) {
             engineFailureCount = 0
