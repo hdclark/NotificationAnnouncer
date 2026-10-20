@@ -45,6 +45,7 @@ class NotificationAnnouncerService : NotificationListenerService() {
     private var audioPrepared = false
     private var suppressAutomaticResume = false
     private var lastNotificationUptime = 0L
+    private var firstNotificationUptime = 0L
 
     // Everything touching the queue, focus, or TTS state runs on the main looper.
     private val startNextRunnable = Runnable { startNextAnnouncement() }
@@ -317,8 +318,11 @@ class NotificationAnnouncerService : NotificationListenerService() {
 
     private fun queueAnnouncement(text: String) {
         val firstInBurst = announcements.enqueue(text, audioManager?.isMusicActive == true)
-        if (firstInBurst) suppressAutomaticResume = false
         lastNotificationUptime = SystemClock.uptimeMillis()
+        if (firstInBurst) {
+            suppressAutomaticResume = false
+            firstNotificationUptime = lastNotificationUptime
+        }
         reportStatus("Announcement queued (${announcements.queuedCount} waiting)")
         if (!ttsReady && tts == null && !engineRestartScheduled) {
             engineFailureCount = 0
@@ -332,14 +336,19 @@ class NotificationAnnouncerService : NotificationListenerService() {
         mainHandler.removeCallbacks(releaseFocusRunnable)
         mainHandler.removeCallbacks(finalizeBatchRunnable)
         if (destroyed || !announcements.hasQueued || announcements.isSpeaking || !ttsReady) return
-        val remaining = (lastNotificationUptime + NOTIFICATION_QUIET_MS -
-            SystemClock.uptimeMillis()).coerceAtLeast(0L)
+        val remaining = AnnouncementTiming.waitBeforeSpeaking(
+            firstNotificationUptime, lastNotificationUptime, SystemClock.uptimeMillis(),
+            NOTIFICATION_QUIET_MS, MAX_QUIET_WAIT_MS,
+        )
         mainHandler.postDelayed(startNextRunnable, remaining)
     }
 
     private fun startNextAnnouncement() {
         if (destroyed || !announcements.hasQueued || announcements.isSpeaking || !ttsReady) return
-        val remaining = lastNotificationUptime + NOTIFICATION_QUIET_MS - SystemClock.uptimeMillis()
+val remaining = AnnouncementTiming.waitBeforeSpeaking(
+            firstNotificationUptime, lastNotificationUptime, SystemClock.uptimeMillis(),
+            NOTIFICATION_QUIET_MS, MAX_QUIET_WAIT_MS,
+        )
         if (remaining > 0L) {
             mainHandler.postDelayed(startNextRunnable, remaining)
             return
@@ -543,6 +552,7 @@ class NotificationAnnouncerService : NotificationListenerService() {
     companion object {
         private const val TAG = "NotificationAnnouncer"
         private const val NOTIFICATION_QUIET_MS = 3_000L
+        private const val MAX_QUIET_WAIT_MS = 6_000L
         private const val BATCH_GRACE_MS = 1_500L
         private const val FOCUS_SETTLE_MS = 350L
         private const val FOCUS_RELEASE_SETTLE_MS = 350L
