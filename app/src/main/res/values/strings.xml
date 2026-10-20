@@ -27,4 +27,7 @@
         <item>Always resume music</item>
         <item>Never resume music</item>
     </string-array>
+    <string name="speech_diagnostics_title">Speech engine diagnostics</string>
+    <string name="speech_diagnostics_waiting">Waiting for speech status…</string>
+    <string name="test_speech_button">Test announcement</string>
 </resources>
