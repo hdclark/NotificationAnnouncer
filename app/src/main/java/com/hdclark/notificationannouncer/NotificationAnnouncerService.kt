@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.ComponentName
 import android.content.Intent
 import android.content.IntentFilter
 import android.media.AudioAttributes
@@ -113,7 +114,10 @@ class NotificationAnnouncerService : NotificationListenerService() {
 
     override fun onListenerDisconnected() {
         stopCurrentAnnouncements()
-        reportStatus("Notification listener disconnected; check notification access")
+        reportStatus("Notification listener disconnected; requesting rebind")
+        // Android will no longer deliver posted notifications until the listener reconnects.
+        // Rebinding is explicitly permitted by NotificationListenerService at this point.
+        requestRebind(ComponentName(this, NotificationAnnouncerService::class.java))
         super.onListenerDisconnected()
     }
 
