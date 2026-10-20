@@ -10,7 +10,7 @@ Developers should use GitHub Actions CI to build APKs. The workflow in `.github/
 ## Music interruption and de-sync prevention
 
 Notifications are announced serially as one **burst**. A 3-second quiet window, measured
-from the most recent eligible notification, allows system notification sounds to finish
+from the most recent eligible notification (capped at 6 seconds from the first), allows system notification sounds to finish
 before speech begins. New notifications arriving while speaking join the existing burst
 rather than starting another audio-focus transaction. The app holds one transient audio
 focus request until all utterances finish plus a 1.5-second burst grace period. Audio
