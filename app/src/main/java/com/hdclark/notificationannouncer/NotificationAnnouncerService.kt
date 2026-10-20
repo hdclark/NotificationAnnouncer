@@ -50,7 +50,11 @@ class NotificationAnnouncerService : NotificationListenerService(), TextToSpeech
         // restart the previous player's music on their behalf in that situation.
         if (change == AudioManager.AUDIOFOCUS_LOSS) {
             mainHandler.post {
-                if (!destroyed) stopCurrentAnnouncements(restorePlayback = false)
+                // A late callback for a focus request we already abandoned must not
+                // cancel the queued playback restoration or a subsequent burst.
+                if (!destroyed && activeFocusRequest != null) {
+                    stopCurrentAnnouncements(restorePlayback = false)
+                }
             }
         }
     }
