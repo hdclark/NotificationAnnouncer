@@ -10,6 +10,25 @@ object NotificationSettingsStore {
     private const val KEY_APP_LAST_SEEN = "app_last_seen"
     private const val KEY_ANNOUNCEMENTS_ENABLED = "announcements_enabled"
     private const val KEY_MUSIC_RESUME_MODE = "music_resume_mode"
+    private const val KEY_SPEECH_STATUS = "speech_status"
+    private const val KEY_SPEECH_STATUS_TIME = "speech_status_time"
+
+    fun getSpeechStatus(context: Context): String {
+        val preferences = prefs(context)
+        val status = preferences.getString(KEY_SPEECH_STATUS, null) ?: return "Speech status not yet available"
+        val whenRecorded = preferences.getLong(KEY_SPEECH_STATUS_TIME, 0L)
+        val time = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(
+            java.util.Date(whenRecorded)
+        )
+        return "$time — $status"
+    }
+
+    fun setSpeechStatus(context: Context, status: String) {
+        prefs(context).edit()
+            .putString(KEY_SPEECH_STATUS, status)
+            .putLong(KEY_SPEECH_STATUS_TIME, System.currentTimeMillis())
+            .apply()
+    }
 
     fun isPackageEnabled(context: Context, packageName: String): Boolean {
         return !loadDisabledPackages(context).contains(packageName)
