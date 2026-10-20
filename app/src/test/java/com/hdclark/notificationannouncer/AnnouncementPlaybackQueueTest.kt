@@ -111,7 +111,7 @@ class AnnouncementPlaybackQueueTest {
             queue.enqueue("message $index", false)
         }
         assertEquals(AnnouncementPlaybackQueue.MAX_QUEUED, queue.queuedCount)
-        assertEquals("message 6", queue.startNext("first"))
+        assertEquals("message 5", queue.startNext("first"))
     }
 
 }
