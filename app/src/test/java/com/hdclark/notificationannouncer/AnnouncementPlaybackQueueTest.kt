@@ -114,4 +114,14 @@ class AnnouncementPlaybackQueueTest {
         assertEquals("message 5", queue.startNext("first"))
     }
 
+    @Test
+    fun `three second quiet window is capped during repeated notifications`() {
+        assertEquals(3_000L, AnnouncementTiming.waitBeforeSpeaking(100L, 100L, 100L))
+        assertEquals(3_000L, AnnouncementTiming.waitBeforeSpeaking(100L, 2_000L, 2_000L))
+        // New notifications have arrived for longer than the maximum wait.
+        assertEquals(0L, AnnouncementTiming.waitBeforeSpeaking(100L, 7_000L, 7_000L))
+        // Without the cap this would keep slipping by another three seconds.
+        assertEquals(500L, AnnouncementTiming.waitBeforeSpeaking(100L, 5_800L, 5_600L))
+    }
+
 }
