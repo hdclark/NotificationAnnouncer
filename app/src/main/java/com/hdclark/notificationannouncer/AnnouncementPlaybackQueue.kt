@@ -103,3 +103,19 @@ enum class MusicResumeMode(val storedValue: String) {
             entries.firstOrNull { it.storedValue == value } ?: AUTOMATIC
     }
 }
+
+
+/** Prevents repeated notifications from postponing speech indefinitely. */
+object AnnouncementTiming {
+    fun waitBeforeSpeaking(
+        firstNotificationUptime: Long,
+        mostRecentNotificationUptime: Long,
+        currentUptime: Long,
+        quietWindowMs: Long = 3_000L,
+        maxWaitMs: Long = 6_000L,
+    ): Long {
+        val quietDeadline = mostRecentNotificationUptime + quietWindowMs
+        val absoluteDeadline = firstNotificationUptime + maxWaitMs
+        return (minOf(quietDeadline, absoluteDeadline) - currentUptime).coerceAtLeast(0L)
+    }
+}
