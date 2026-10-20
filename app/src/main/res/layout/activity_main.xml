@@ -29,6 +29,27 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="16dp"
+        android:text="@string/speech_diagnostics_title"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/speechStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/speech_diagnostics_waiting" />
+
+    <Button
+        android:id="@+id/testSpeechButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/test_speech_button" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
         android:text="@string/music_resume_mode_title"
         android:textStyle="bold" />
 
