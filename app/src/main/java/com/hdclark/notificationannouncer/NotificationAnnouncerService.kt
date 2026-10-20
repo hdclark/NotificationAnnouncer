@@ -222,7 +222,7 @@ class NotificationAnnouncerService : NotificationListenerService() {
 
     private fun postUtteranceFinished(
         id: String?, generation: Int, failed: Boolean, reason: String
-    ) {
+    ): Unit {
         mainHandler.post {
             if (destroyed || generation != ttsGeneration) return@post
             if (id == null || announcements.activeUtteranceId != id) return@post
