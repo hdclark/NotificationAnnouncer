@@ -53,3 +53,36 @@ sound settings of other applications.
 Run `./gradlew testDebugUnitTest assembleDebug` to execute the queue/policy tests and
 build a debug APK. A physical-device test is still needed because Android and third-party
 media players control the actual media-key/focus behavior.
+
+## Speech-engine recovery and diagnostics
+
+A successful call to `TextToSpeech.speak()` only confirms that the request was
+accepted, not that the speech started. The service now supervises TTS with a 12-second
+startup watchdog and a duration-dependent completion watchdog. When a request times
+out or fails, its utterance ID is invalidated and the engine is restarted. Each
+message is retried at most once, then skipped so subsequent notifications continue.
+A bounded queue (40 pending messages) prevents unbounded memory use during a
+persistent outage. Initialization failures have bounded retries; later notifications
+can trigger new recovery attempts.
+
+If Android denies audio focus, speech is no longer silently discarded: the app tries
+to pause media using a PAUSE media key, then makes a best-effort announcement. Some
+music players may ignore that media key, so a focus-denied announcement may still
+overlap music. Announcements are deferred during call/communication audio.
+
+The main screen now shows the last speech-engine status and a **Test announcement**
+button. Press it to test the entire announcement queue without relying on the
+notification type, importance, selected-app filters, or another app posting a message.
+If a test produces no speech, inspect the status line to distinguish initialization,
+audio preparation, speech startup, timeouts, and recovery. A disconnected notification
+listener attempts to request a rebind; check Android notification-access permissions
+if the status continues to report disconnection.
+
+For additional diagnostics (ADB installed), use:
+`adb logcat -s NotificationAnnouncer:I TextToSpeech:V`
+
+To verify the failure mode that prompted this update, play music and post several
+notifications quickly, then leave the app running for hours and try again. Repeat
+after switching apps, pausing playback, and locking the screen. Repeated failures
+must no longer permanently wedge the queue; status should show engine recovery or a
+specific failure instead of silently doing nothing.
