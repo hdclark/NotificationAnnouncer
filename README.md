@@ -29,8 +29,9 @@ In the main screen, **Music playback after announcements** offers:
   user manually started during the announcement.
 
 The setting is stored in the existing app preferences, and upgrading users retain
-the original automatic policy. A permanently lost audio-focus request cancels speech
-without restarting the previous player. If Android refuses audio focus (for example,
+the original automatic policy. If another media app permanently takes audio focus mid-announcement, speech
+continues in best-effort mode without restarting the previous player's music.
+For calls, speech is cancelled instead for privacy. If Android refuses audio focus (for example,
 during a phone call), speech is not played over existing audio; acquisition is retried
 a limited number of times instead. The app does not attempt to change the notification
 sound settings of other applications.
