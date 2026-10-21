@@ -45,10 +45,10 @@ class NotificationAnnouncerService : NotificationListenerService() {
     private var suppressAutomaticResume = false
     // Event-driven recheck quickly corrects media players that restart on focus gain.
     // A periodic poll remains as a fallback for players which never report state updates.
-    private val enforcePlaybackRunnable = Runnable {
+    private val enforcePlaybackRunnable: Runnable = Runnable {
         if (!destroyed && announcements.sessionOpen && audioPrepared) musicHold.enforce()
     }
-    private val musicHold by lazy {
+    private val musicHold: MusicPlaybackHold by lazy {
         MusicPlaybackHold(AndroidMusicTransport(this, audioManager) {
             mainHandler.removeCallbacks(enforcePlaybackRunnable)
             mainHandler.postDelayed(enforcePlaybackRunnable, MEDIA_RESUME_DEBOUNCE_MS)
