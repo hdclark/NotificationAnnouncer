@@ -19,6 +19,7 @@ internal class MusicPlaybackHold(private val transport: Transport) {
         fun play(id: String)
         fun pauseDefault()
         fun playDefault()
+        fun release() = Unit
     }
 
     private val originalSessions = linkedSetOf<String>()
@@ -119,6 +120,7 @@ internal class MusicPlaybackHold(private val transport: Transport) {
         finish(mode, automaticResumeAllowed)
 
     private fun clear() {
+        transport.release()
         originalSessions.clear()
         wasMusicPlaying = false
         fallback = false
