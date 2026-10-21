@@ -39,7 +39,7 @@ class MusicPlaybackHoldTest {
 
         // Capture and pause BEFORE taking transient focus.
         hold.begin(true)
-        assertEquals(listOf("pause:spotify", "pause:spotify"), transport.actions)
+        assertEquals(listOf("pause:spotify"), transport.actions)
         assertFalse(transport.players.getValue("spotify").playing)
 
         // TTS or another focus request makes the music app resume prematurely.
@@ -87,6 +87,29 @@ class MusicPlaybackHoldTest {
         assertTrue(transport.actions.contains("pause:new-player"))
         assertTrue(transport.actions.none { it == "play:new-player" })
         assertTrue(transport.actions.none { it == "play:original" })
+    }
+
+    @Test fun aNewMusicAppStartingDuringSpeechSuppressesRestorationOfPreviousMusic() {
+        val transport = FakeTransport()
+        transport.players["original"] = FakeTransport.State(playing = true)
+        val hold = MusicPlaybackHold(transport)
+        hold.begin(true)
+        transport.players["other-app"] = FakeTransport.State(playing = true)
+        hold.enforce()
+        hold.finish(MusicResumeMode.AUTOMATIC, true)
+        assertTrue(transport.actions.contains("pause:other-app"))
+        assertTrue(transport.actions.none { it == "play:original" })
+        assertTrue(transport.actions.none { it == "play:other-app" })
+    }
+
+    @Test fun mediaSessionSnapshotWorksIfGlobalMusicDetectionWasTemporarilyFalse() {
+        val transport = FakeTransport()
+        transport.players["original"] = FakeTransport.State(playing = true)
+        val hold = MusicPlaybackHold(transport)
+        hold.begin(false)
+        hold.finish(MusicResumeMode.AUTOMATIC, true)
+        assertTrue(transport.actions.contains("pause:original"))
+        assertTrue(transport.actions.contains("play:original"))
     }
 
     @Test fun neverResumeKeepsMusicPausedAfterFocusIsReleased() {
