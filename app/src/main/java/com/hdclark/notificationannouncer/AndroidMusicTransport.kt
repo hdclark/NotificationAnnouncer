@@ -9,6 +9,8 @@ import android.media.session.MediaSession
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.KeyEvent
 
@@ -23,10 +25,13 @@ import android.view.KeyEvent
 internal class AndroidMusicTransport(
     private val context: Context,
     private val audioManager: AudioManager?,
+    private val onUnexpectedPlayback: () -> Unit = {},
 ) : MusicPlaybackHold.Transport {
     private val sessionManager = context.getSystemService(MediaSessionManager::class.java)
     private val listener = ComponentName(context, NotificationAnnouncerService::class.java)
     private val knownControllers = mutableMapOf<String, MediaController>()
+    private val stateCallbacks = mutableMapOf<String, MediaController.Callback>()
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val ineffectivePauseAttempts = mutableMapOf<String, Int>()
     private var loggedDiscoveryFailure = false
 
@@ -61,6 +66,18 @@ internal class AndroidMusicTransport(
         }.map { controller ->
             val id = id(controller)
             knownControllers[id] = controller
+            if (id !in stateCallbacks) {
+                val callback = object : MediaController.Callback() {
+                    override fun onPlaybackStateChanged(state: PlaybackState?) {
+                        if (state?.state in PLAYING_STATES) onUnexpectedPlayback()
+                    }
+                }
+                runCatching { controller.registerCallback(callback, mainHandler) }
+                    .onSuccess { stateCallbacks[id] = callback }
+            }
+            if (controller.playbackState?.state !in PLAYING_STATES) {
+                ineffectivePauseAttempts.remove(id)
+            }
             MusicPlaybackHold.Session(
                 id = id,
                 isPlaying = controller.playbackState?.state in PLAYING_STATES,
@@ -99,6 +116,12 @@ internal class AndroidMusicTransport(
     }
 
     override fun release() {
+        stateCallbacks.forEach { (id, callback) ->
+            knownControllers[id]?.let { controller ->
+                runCatching { controller.unregisterCallback(callback) }
+            }
+        }
+        stateCallbacks.clear()
         knownControllers.clear()
         ineffectivePauseAttempts.clear()
     }
