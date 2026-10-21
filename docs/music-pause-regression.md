@@ -26,7 +26,7 @@ that a particular third-party player obeys media-session transport commands.
 - Spotify, YouTube Music, VLC, a podcast player, and the exact player affected on the device.
 - Music playing before TTS vs. music intentionally paused before TTS.
 - Start a different player during an announcement. It should be silenced during TTS,
-  but must not be auto-started by GymTracker's unrelated or prior music snapshot.
+  but must not be auto-started by the previous music session.
 - **Automatic**, **Always resume**, **Never resume** settings, both with music playing
   and with no media player active.
 - Place or receive a call. TTS should stop/defer appropriately and not speak over calls.
