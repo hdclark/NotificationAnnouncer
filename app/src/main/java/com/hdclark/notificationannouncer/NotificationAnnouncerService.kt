@@ -24,7 +24,6 @@ import android.service.notification.StatusBarNotification
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
-import android.view.KeyEvent
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import java.util.Locale
@@ -44,6 +43,17 @@ class NotificationAnnouncerService : NotificationListenerService() {
     private var focusGeneration = 0
     private var audioPrepared = false
     private var suppressAutomaticResume = false
+    private val musicHold by lazy {
+        MusicPlaybackHold(AndroidMusicTransport(this, audioManager))
+    }
+    private val maintainPauseRunnable = object : Runnable {
+        override fun run() {
+            if (!destroyed && announcements.sessionOpen && audioPrepared) {
+                musicHold.enforce()
+                mainHandler.postDelayed(this, MUSIC_HOLD_RECHECK_MS)
+            }
+        }
+    }
     private var lastNotificationUptime = 0L
     private var firstNotificationUptime = 0L
 
@@ -103,6 +113,7 @@ class NotificationAnnouncerService : NotificationListenerService() {
         stopCurrentAnnouncements()
         mainHandler.removeCallbacks(ttsRestartRunnable)
         mainHandler.removeCallbacks(ttsInitWatchdogRunnable)
+        mainHandler.removeCallbacks(maintainPauseRunnable)
         tts?.shutdown()
         tts = null
         super.onDestroy()
@@ -245,6 +256,7 @@ class NotificationAnnouncerService : NotificationListenerService() {
     private fun onUtteranceStarted(id: String?) {
         if (id == null || id != announcements.activeUtteranceId) return
         reportStatus("Speaking announcement")
+        musicHold.enforce()
         // Startup watchdog is replaced with a duration-dependent *completion* watchdog.
         // It must accommodate large spoken messages without timing out normal TTS.
         val maximumDuration = (
@@ -369,6 +381,8 @@ class NotificationAnnouncerService : NotificationListenerService() {
             return
         }
 
+        // A player can auto-resume between the initial focus request and TTS startup.
+        musicHold.enforce()
         val id = UUID.randomUUID().toString()
         val announcement = announcements.startNext(id) ?: return
         val params = Bundle().apply {
@@ -388,31 +402,42 @@ class NotificationAnnouncerService : NotificationListenerService() {
     private fun prepareAnnouncementAudio() {
         val manager = audioManager
         if (manager == null) {
-            reportStatus("Audio manager unavailable; announcing without audio focus")
+            reportStatus("Audio manager unavailable; announcements may overlap media")
             audioPrepared = true
             return
         }
+
+        // Snapshot which specific music sessions were playing BEFORE our focus
+        // request. A transient focus change can otherwise obscure their state.
         announcements.observeMusicBeforeSpeech(manager.isMusicActive)
+        musicHold.begin(announcements.musicWasPlaying)
+        audioPrepared = true
+        mainHandler.removeCallbacks(maintainPauseRunnable)
+        mainHandler.postDelayed(maintainPauseRunnable, MUSIC_HOLD_RECHECK_MS)
+
         val session = ++focusGeneration
         val listener = AudioManager.OnAudioFocusChangeListener { change ->
-            if (change == AudioManager.AUDIOFOCUS_LOSS) {
-                mainHandler.post {
-                    if (!destroyed && session == focusGeneration && activeFocusRequest != null) {
-                        if (audioManager?.mode == AudioManager.MODE_IN_CALL ||
-                            audioManager?.mode == AudioManager.MODE_IN_COMMUNICATION
-                        ) {
-                            stopCurrentAnnouncements(restorePlayback = false)
-                            reportStatus("Speech stopped for a call or communication session")
-                        } else {
-                            // Do not throw away speech simply because another application
-                            // took focus. Continue the existing TTS request in best-effort
-                            // mode, and let its watchdog recover if audio output stalls.
-                            abandonAnnouncementAudioFocus()
-                            audioPrepared = true
-                            suppressAutomaticResume = true
-                            reportStatus("Audio focus lost; continuing speech without focus")
-                        }
-                    }
+            mainHandler.post {
+                if (destroyed || session != focusGeneration || !announcements.sessionOpen) return@post
+                if (change == AudioManager.AUDIOFOCUS_LOSS &&
+                    (audioManager?.mode == AudioManager.MODE_IN_CALL ||
+                        audioManager?.mode == AudioManager.MODE_IN_COMMUNICATION)
+                ) {
+                    stopCurrentAnnouncements(restorePlayback = false)
+                    reportStatus("Speech stopped for a call or communication session")
+                    return@post
+                }
+                // CRITICAL: an external TTS engine may itself request focus just as it
+                // starts speaking. Abandoning OUR focus here can immediately allow the
+                // previous music player to resume. Never release it before batch end.
+                // Independently keep the exact original music session paused even if
+                // another focus owner becomes active.
+                if (change == AudioManager.AUDIOFOCUS_LOSS ||
+                    change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT ||
+                    change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK ||
+                    change == AudioManager.AUDIOFOCUS_GAIN
+                ) {
+                    musicHold.enforce()
                 }
             }
         }
@@ -431,14 +456,11 @@ class NotificationAnnouncerService : NotificationListenerService() {
         if (granted) {
             activeFocusRequest = request
         } else {
-            // Critical: loss of audio focus must never cause total loss of announcements.
-            // Try media PAUSE as a best-effort fallback. Some third-party players may ignore it.
-            reportStatus("Audio focus denied; using best-effort media pause for speech")
+            // This is NOT a reason to drop notifications or speak over music:
+            // direct transport pause works separately from audio-focus ownership.
+            reportStatus("Audio focus denied; actively holding media sessions paused")
         }
-        if (announcements.musicWasPlaying ||
-            NotificationSettingsStore.getMusicResumeMode(this) != MusicResumeMode.AUTOMATIC
-        ) dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
-        audioPrepared = true
+        musicHold.enforce()
     }
 
     private fun scheduleBatchCompletion() {
@@ -452,32 +474,24 @@ class NotificationAnnouncerService : NotificationListenerService() {
     private fun beginBatchCompletion() {
         if (announcements.isSpeaking || announcements.hasQueued || !announcements.sessionOpen) return
         abandonAnnouncementAudioFocus()
-        audioPrepared = false
-        if (NotificationSettingsStore.getMusicResumeMode(this) == MusicResumeMode.NEVER) {
-            dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
-        }
+        // Keep the pause guard running while focus restoration settles; some
+        // players automatically start again on transient AUDIOFOCUS_GAIN.
+        musicHold.enforce()
         mainHandler.postDelayed(finalizeBatchRunnable, FOCUS_RELEASE_SETTLE_MS)
     }
 
     private fun finalizeBatchCompletion() {
         if (announcements.isSpeaking || announcements.hasQueued || !announcements.sessionOpen) return
-        applyPlaybackResumeMode(announcements.musicWasPlaying)
+        mainHandler.removeCallbacks(maintainPauseRunnable)
+        musicHold.finish(
+            NotificationSettingsStore.getMusicResumeMode(this),
+            automaticResumeAllowed = !suppressAutomaticResume
+        )
+        audioPrepared = false
         announcements.cancel()
         suppressAutomaticResume = false
         engineFailureCount = 0
         reportStatus(if (ttsReady) "Ready to announce notifications" else "Speech engine unavailable; the next notification will trigger recovery")
-    }
-
-    private fun applyPlaybackResumeMode(wasMusicPlaying: Boolean) {
-        when (NotificationSettingsStore.getMusicResumeMode(this)) {
-            MusicResumeMode.ALWAYS -> dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
-            MusicResumeMode.NEVER -> dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
-            MusicResumeMode.AUTOMATIC -> {
-                if (!suppressAutomaticResume && wasMusicPlaying && audioManager?.isMusicActive != true) {
-                    dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
-                }
-            }
-        }
     }
 
     private fun stopCurrentAnnouncements(restorePlayback: Boolean = true) {
@@ -485,13 +499,19 @@ class NotificationAnnouncerService : NotificationListenerService() {
         mainHandler.removeCallbacks(releaseFocusRunnable)
         mainHandler.removeCallbacks(finalizeBatchRunnable)
         clearSpeechWatchdog()
-        val wasPlaying = announcements.musicWasPlaying
         val hadSession = announcements.sessionOpen
+        mainHandler.removeCallbacks(maintainPauseRunnable)
         announcements.cancel()
         tts?.stop()
         abandonAnnouncementAudioFocus()
+        if (hadSession) {
+            musicHold.cancel(
+                if (restorePlayback) NotificationSettingsStore.getMusicResumeMode(this)
+                else MusicResumeMode.NEVER,
+                automaticResumeAllowed = !suppressAutomaticResume && restorePlayback
+            )
+        }
         audioPrepared = false
-        if (hadSession && restorePlayback) applyPlaybackResumeMode(wasPlaying)
         suppressAutomaticResume = false
     }
 
@@ -500,12 +520,6 @@ class NotificationAnnouncerService : NotificationListenerService() {
         val request = activeFocusRequest ?: return
         activeFocusRequest = null
         audioManager?.abandonAudioFocusRequest(request)
-    }
-
-    private fun dispatchMediaKey(keyCode: Int) {
-        val manager = audioManager ?: return
-        manager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
-        manager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
     }
 
     private fun reportStatus(message: String) {
@@ -556,6 +570,7 @@ class NotificationAnnouncerService : NotificationListenerService() {
         private const val MAX_QUIET_WAIT_MS = 6_000L
         private const val BATCH_GRACE_MS = 1_500L
         private const val FOCUS_SETTLE_MS = 350L
+        private const val MUSIC_HOLD_RECHECK_MS = 700L
         private const val FOCUS_RELEASE_SETTLE_MS = 350L
         private const val MAX_ENGINE_RESTARTS = 3
         private const val TTS_INIT_TIMEOUT_MS = 12_000L
