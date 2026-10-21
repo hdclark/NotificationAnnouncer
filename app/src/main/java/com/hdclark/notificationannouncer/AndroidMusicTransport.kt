@@ -3,6 +3,7 @@ package com.hdclark.notificationannouncer
 import android.content.ComponentName
 import android.content.Context
 import android.media.AudioManager
+import android.media.AudioAttributes
 import android.media.session.MediaController
 import android.media.session.MediaSession
 import android.media.session.MediaSessionManager
@@ -26,6 +27,7 @@ internal class AndroidMusicTransport(
     private val sessionManager = context.getSystemService(MediaSessionManager::class.java)
     private val listener = ComponentName(context, NotificationAnnouncerService::class.java)
     private val knownControllers = mutableMapOf<String, MediaController>()
+    private val ineffectivePauseAttempts = mutableMapOf<String, Int>()
     private var loggedDiscoveryFailure = false
 
     override fun sessions(): List<MusicPlaybackHold.Session>? {
@@ -49,7 +51,14 @@ internal class AndroidMusicTransport(
             runCatching { MediaController(context, preferredToken) }.getOrNull()
                 ?.let { controllers.add(it) }
         }
-        return controllers.filter { it.packageName != context.packageName }.map { controller ->
+        return controllers.filter { controller ->
+            if (controller.packageName == context.packageName) return@filter false
+            // Avoid pausing an accessibility / speech / call session, including a
+            // TTS engine hosted in a different package from this application.
+            val usage = controller.playbackInfo?.audioAttributes?.usage
+            usage == null || usage == AudioAttributes.USAGE_UNKNOWN ||
+                usage == AudioAttributes.USAGE_MEDIA || usage == AudioAttributes.USAGE_GAME
+        }.map { controller ->
             val id = id(controller)
             knownControllers[id] = controller
             MusicPlaybackHold.Session(
@@ -62,19 +71,36 @@ internal class AndroidMusicTransport(
 
     override fun pause(id: String) {
         val controller = knownControllers[id] ?: return
+        val attempt = (ineffectivePauseAttempts[id] ?: 0) + 1
+        ineffectivePauseAttempts[id] = attempt
         runCatching { controller.transportControls.pause() }.onFailure {
             Log.w(TAG, "Targeted media pause failed for ${controller.packageName}", it)
-            // Last resort: send the command to this specific session, not a random player.
             dispatchToController(controller, KeyEvent.KEYCODE_MEDIA_PAUSE)
+        }
+        // The next poll only calls pause() if the controller STILL reports PLAYING.
+        // Some players ignore TransportControls.pause despite not throwing an
+        // exception. Escalate after two failed state transitions, not immediately.
+        if (attempt >= 2) {
+            dispatchToController(controller, KeyEvent.KEYCODE_MEDIA_PAUSE)
+        }
+        if (attempt >= 4 && attempt % 4 == 0) {
+            Log.w(TAG, "Media session ${controller.packageName} still playing after $attempt pause attempts")
+            dispatchToSystem(KeyEvent.KEYCODE_MEDIA_PAUSE)
         }
     }
 
     override fun play(id: String) {
         val controller = knownControllers[id] ?: return
+        ineffectivePauseAttempts.remove(id)
         runCatching { controller.transportControls.play() }.onFailure {
             Log.w(TAG, "Targeted media resume failed for ${controller.packageName}", it)
             dispatchToController(controller, KeyEvent.KEYCODE_MEDIA_PLAY)
         }
+    }
+
+    override fun release() {
+        knownControllers.clear()
+        ineffectivePauseAttempts.clear()
     }
 
     override fun pauseDefault() = dispatchToSystem(KeyEvent.KEYCODE_MEDIA_PAUSE)
