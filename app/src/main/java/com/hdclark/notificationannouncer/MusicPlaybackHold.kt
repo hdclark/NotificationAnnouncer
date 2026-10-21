@@ -24,18 +24,22 @@ internal class MusicPlaybackHold(private val transport: Transport) {
     private val originalSessions = linkedSetOf<String>()
     private var wasMusicPlaying = false
     private var fallback = false
+    private var competingSessionSeen = false
     var isOpen: Boolean = false
         private set
 
     fun begin(musicWasPlaying: Boolean) {
         if (isOpen) return
         isOpen = true
-        wasMusicPlaying = musicWasPlaying
         originalSessions.clear()
         fallback = false
+        competingSessionSeen = false
 
         val sessions = transport.sessions()
         val playing = sessions.orEmpty().filter { it.isPlaying }
+        // A playing media session is a stronger signal than isMusicActive, which
+        // can temporarily report false around a notification sound or focus loss.
+        wasMusicPlaying = musicWasPlaying || playing.isNotEmpty()
         if (playing.isNotEmpty()) {
             originalSessions.addAll(playing.map { it.id })
         } else if (musicWasPlaying) {
@@ -52,13 +56,13 @@ internal class MusicPlaybackHold(private val transport: Transport) {
         // Do not resume an unrelated player merely because some other audio (e.g.
         // a notification sound) was active. The queue's pre-speech snapshot is the
         // authority for automatic resumption.
-        if (!musicWasPlaying) originalSessions.clear()
-        playing.forEach { transport.pause(it.id) }
-        if (originalSessions.isEmpty() && musicWasPlaying) {
+        if (!wasMusicPlaying) originalSessions.clear()
+        if (originalSessions.isEmpty() && wasMusicPlaying) {
             fallback = true
             transport.pauseDefault()
         } else {
-            originalSessions.forEach { transport.pause(it) }
+            // Only one idempotent pause per target, even if it was already playing.
+            (playing.map { it.id } + originalSessions).distinct().forEach { transport.pause(it) }
         }
     }
 
@@ -70,8 +74,12 @@ internal class MusicPlaybackHold(private val transport: Transport) {
             if (fallback && wasMusicPlaying) transport.pauseDefault()
             return
         }
-        // We silence new players started during TTS, but will NOT auto-resume them.
-        sessions.filter { it.isPlaying }.forEach { transport.pause(it.id) }
+        // We silence new players started during TTS, but will NOT auto-resume them
+        // or override their newly chosen music by restoring the original one.
+        sessions.filter { it.isPlaying }.forEach {
+            if (it.id !in originalSessions) competingSessionSeen = true
+            transport.pause(it.id)
+        }
     }
 
     /**
@@ -88,7 +96,8 @@ internal class MusicPlaybackHold(private val transport: Transport) {
             MusicResumeMode.ALWAYS -> true
             MusicResumeMode.NEVER -> false
             MusicResumeMode.AUTOMATIC ->
-                wasMusicPlaying && automaticResumeAllowed && !otherPlayerIsPlaying
+                wasMusicPlaying && automaticResumeAllowed &&
+                    !otherPlayerIsPlaying && !competingSessionSeen
         }
         if (restore) {
             if (originalSessions.isNotEmpty()) {
@@ -113,6 +122,7 @@ internal class MusicPlaybackHold(private val transport: Transport) {
         originalSessions.clear()
         wasMusicPlaying = false
         fallback = false
+        competingSessionSeen = false
         isOpen = false
     }
 }
