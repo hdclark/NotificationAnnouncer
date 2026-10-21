@@ -43,8 +43,16 @@ class NotificationAnnouncerService : NotificationListenerService() {
     private var focusGeneration = 0
     private var audioPrepared = false
     private var suppressAutomaticResume = false
+    // Event-driven recheck quickly corrects media players that restart on focus gain.
+    // A periodic poll remains as a fallback for players which never report state updates.
+    private val enforcePlaybackRunnable = Runnable {
+        if (!destroyed && announcements.sessionOpen && audioPrepared) musicHold.enforce()
+    }
     private val musicHold by lazy {
-        MusicPlaybackHold(AndroidMusicTransport(this, audioManager))
+        MusicPlaybackHold(AndroidMusicTransport(this, audioManager) {
+            mainHandler.removeCallbacks(enforcePlaybackRunnable)
+            mainHandler.postDelayed(enforcePlaybackRunnable, MEDIA_RESUME_DEBOUNCE_MS)
+        })
     }
     private val maintainPauseRunnable = object : Runnable {
         override fun run() {
@@ -114,6 +122,7 @@ class NotificationAnnouncerService : NotificationListenerService() {
         mainHandler.removeCallbacks(ttsRestartRunnable)
         mainHandler.removeCallbacks(ttsInitWatchdogRunnable)
         mainHandler.removeCallbacks(maintainPauseRunnable)
+        mainHandler.removeCallbacks(enforcePlaybackRunnable)
         tts?.shutdown()
         tts = null
         super.onDestroy()
@@ -483,6 +492,7 @@ class NotificationAnnouncerService : NotificationListenerService() {
     private fun finalizeBatchCompletion() {
         if (announcements.isSpeaking || announcements.hasQueued || !announcements.sessionOpen) return
         mainHandler.removeCallbacks(maintainPauseRunnable)
+        mainHandler.removeCallbacks(enforcePlaybackRunnable)
         musicHold.finish(
             NotificationSettingsStore.getMusicResumeMode(this),
             automaticResumeAllowed = !suppressAutomaticResume
@@ -501,6 +511,7 @@ class NotificationAnnouncerService : NotificationListenerService() {
         clearSpeechWatchdog()
         val hadSession = announcements.sessionOpen
         mainHandler.removeCallbacks(maintainPauseRunnable)
+        mainHandler.removeCallbacks(enforcePlaybackRunnable)
         announcements.cancel()
         tts?.stop()
         abandonAnnouncementAudioFocus()
@@ -571,6 +582,7 @@ class NotificationAnnouncerService : NotificationListenerService() {
         private const val BATCH_GRACE_MS = 1_500L
         private const val FOCUS_SETTLE_MS = 350L
         private const val MUSIC_HOLD_RECHECK_MS = 700L
+        private const val MEDIA_RESUME_DEBOUNCE_MS = 120L
         private const val FOCUS_RELEASE_SETTLE_MS = 350L
         private const val MAX_ENGINE_RESTARTS = 3
         private const val TTS_INIT_TIMEOUT_MS = 12_000L
