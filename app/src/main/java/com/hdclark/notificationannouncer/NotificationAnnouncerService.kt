@@ -7,7 +7,6 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
-import android.content.ComponentName
 import android.content.Intent
 import android.content.IntentFilter
 import android.media.AudioAttributes
@@ -15,66 +14,30 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
-import android.os.SystemClock
+import androidx.core.content.ContextCompat
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
-import android.util.Log
-import android.view.KeyEvent
 import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
 import java.util.Locale
 import java.util.UUID
 
-class NotificationAnnouncerService : NotificationListenerService() {
-    private val mainHandler = Handler(Looper.getMainLooper())
-    private val announcements = AnnouncementPlaybackQueue()
+class NotificationAnnouncerService : NotificationListenerService(), TextToSpeech.OnInitListener {
     private var tts: TextToSpeech? = null
     private var ttsReady = false
-    private var ttsGeneration = 0
-    private var engineFailureCount = 0
-    private var engineRestartScheduled = false
-    private var destroyed = false
     private var audioManager: AudioManager? = null
     private var activeFocusRequest: AudioFocusRequest? = null
-    private var focusGeneration = 0
-    private var audioPrepared = false
-    private var suppressAutomaticResume = false
-    private var lastNotificationUptime = 0L
-    private var firstNotificationUptime = 0L
-
-    // Everything touching the queue, focus, or TTS state runs on the main looper.
-    private val startNextRunnable = Runnable { startNextAnnouncement() }
-    private val releaseFocusRunnable = Runnable { beginBatchCompletion() }
-    private val finalizeBatchRunnable = Runnable { finalizeBatchCompletion() }
-    private val ttsRestartRunnable = Runnable {
-        engineRestartScheduled = false
-        if (!destroyed) initializeTtsEngine()
-    }
-    private val ttsInitWatchdogRunnable = Runnable {
-        if (!destroyed && !ttsReady) restartTtsEngine("TTS initialization timed out")
-    }
-    private var activeSpeechWatchdog: Runnable? = null
+    private var shouldResumeMusicAfterAnnouncement = false
+    private var pendingAnnouncementCount = 0
 
     private val announcementToggleReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.action) {
-                ACTION_ANNOUNCEMENTS_TOGGLED -> {
-                    if (!NotificationSettingsStore.areAnnouncementsEnabled(this@NotificationAnnouncerService)) {
-                        stopCurrentAnnouncements()
-                    }
-                }
-                ACTION_TEST_ANNOUNCEMENT -> {
-                    if (NotificationSettingsStore.areAnnouncementsEnabled(this@NotificationAnnouncerService)) {
-                        queueAnnouncement("This is a test announcement from Notification Announcer.")
-                    } else {
-                        reportStatus("Announcements are paused; enable them before testing")
-                    }
-                }
+            if (intent?.action == ACTION_ANNOUNCEMENTS_TOGGLED &&
+                !NotificationSettingsStore.areAnnouncementsEnabled(this@NotificationAnnouncerService)
+            ) {
+                stopCurrentAnnouncements()
             }
         }
     }
@@ -83,435 +46,159 @@ class NotificationAnnouncerService : NotificationListenerService() {
         super.onCreate()
         audioManager = getSystemService(AudioManager::class.java)
         ensureControlNotificationChannel(this)
+        tts = TextToSpeech(this, this)
         ContextCompat.registerReceiver(
             this,
             announcementToggleReceiver,
-            IntentFilter().apply {
-                addAction(ACTION_ANNOUNCEMENTS_TOGGLED)
-                addAction(ACTION_TEST_ANNOUNCEMENT)
-            },
+            IntentFilter(ACTION_ANNOUNCEMENTS_TOGGLED),
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
-        reportStatus("Notification listener starting; initializing speech engine")
-        initializeTtsEngine()
     }
 
     override fun onDestroy() {
-        destroyed = true
-        ttsGeneration++ // invalidate old engine callbacks
         runCatching { unregisterReceiver(announcementToggleReceiver) }
-        stopCurrentAnnouncements()
-        mainHandler.removeCallbacks(ttsRestartRunnable)
-        mainHandler.removeCallbacks(ttsInitWatchdogRunnable)
         tts?.shutdown()
         tts = null
+        stopCurrentAnnouncements()
         super.onDestroy()
     }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
         updateControlNotification()
-        reportStatus(if (ttsReady) "Ready to announce notifications" else "Listener connected; speech engine initializing")
-    }
-
-    override fun onListenerDisconnected() {
-        stopCurrentAnnouncements()
-        reportStatus("Notification listener disconnected; requesting rebind")
-        // Android will no longer deliver posted notifications until the listener reconnects.
-        // Rebinding is explicitly permitted by NotificationListenerService at this point.
-        NotificationListenerService.requestRebind(ComponentName(this, NotificationAnnouncerService::class.java))
-        super.onListenerDisconnected()
     }
 
     private fun updateControlNotification() {
         ensureControlNotificationChannel(this)
         getSystemService(NotificationManager::class.java)?.notify(
-            CONTROL_NOTIFICATION_ID, buildControlNotification(this)
+            CONTROL_NOTIFICATION_ID,
+            buildControlNotification(this),
         )
     }
 
-    private fun initializeTtsEngine() {
-        if (destroyed) return
-        engineRestartScheduled = false
-        mainHandler.removeCallbacks(ttsRestartRunnable)
-        mainHandler.removeCallbacks(ttsInitWatchdogRunnable)
-        ttsReady = false
-        val generation = ++ttsGeneration
-        // Shutdown can emit onStop; both generation and utterance ID are checked.
-        tts?.shutdown()
-        tts = null
-        try {
-            tts = TextToSpeech(this, TextToSpeech.OnInitListener { status ->
-                mainHandler.post {
-                    if (!destroyed && generation == ttsGeneration) {
-                        onTtsInitialized(status, generation)
-                    }
-                }
-            })
-            mainHandler.postDelayed(ttsInitWatchdogRunnable, TTS_INIT_TIMEOUT_MS)
-        } catch (error: Exception) {
-            restartTtsEngine("Unable to initialize TTS: ${error.javaClass.simpleName}")
-        }
-    }
-
-    private fun onTtsInitialized(status: Int, generation: Int) {
-        mainHandler.removeCallbacks(ttsInitWatchdogRunnable)
-        if (status != TextToSpeech.SUCCESS) {
-            restartTtsEngine("TTS engine initialization failed: $status")
-            return
-        }
-        val engine = tts ?: run {
-            restartTtsEngine("TTS engine missing after initialization")
-            return
-        }
-        val configured = runCatching {
-            engine.language = Locale.getDefault()
-            engine.setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build()
-            )
-            engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) {
-                    mainHandler.post {
-                        if (generation == ttsGeneration && !destroyed) {
-                            onUtteranceStarted(utteranceId)
-                        }
-                    }
-                }
-
-                override fun onDone(utteranceId: String?) =
-                    postUtteranceFinished(utteranceId, generation, false, "completed")
-
+    override fun onInit(status: Int) {
+        ttsReady = status == TextToSpeech.SUCCESS
+        if (ttsReady) {
+            tts?.language = Locale.getDefault()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                tts?.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+            }
+            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) = Unit
+                override fun onDone(utteranceId: String?) = finishAnnouncementAudio()
                 @Deprecated("Deprecated in Java")
-                override fun onError(utteranceId: String?) =
-                    postUtteranceFinished(utteranceId, generation, true, "TTS synthesis error")
-
-                override fun onError(utteranceId: String?, errorCode: Int) =
-                    postUtteranceFinished(utteranceId, generation, true, "TTS error $errorCode")
-
-                override fun onStop(utteranceId: String?, interrupted: Boolean) =
-                    postUtteranceFinished(utteranceId, generation, true, "TTS interrupted")
+                override fun onError(utteranceId: String?) = finishAnnouncementAudio()
+                override fun onError(utteranceId: String?, errorCode: Int) = finishAnnouncementAudio()
             })
-        }.isSuccess
-        if (!configured) {
-            restartTtsEngine("Could not configure speech engine")
-            return
-        }
-        ttsReady = true
-        engineFailureCount = 0
-        reportStatus("Speech engine ready")
-        scheduleNextAnnouncement()
-    }
-
-    private fun restartTtsEngine(reason: String) {
-        if (destroyed) return
-        ttsReady = false
-        mainHandler.removeCallbacks(ttsInitWatchdogRunnable)
-        mainHandler.removeCallbacks(ttsRestartRunnable)
-        reportStatus("$reason; restarting speech engine")
-        engineFailureCount++
-        if (engineFailureCount > MAX_ENGINE_RESTARTS) {
-            reportStatus("$reason; retries exhausted. Will retry on next notification.")
-            stopCurrentAnnouncements()
-            ttsGeneration++
-            tts?.shutdown()
-            tts = null
-            engineRestartScheduled = false
-            return
-        }
-        engineRestartScheduled = true
-        // Bounded backoff avoids continuously binding a broken TTS service.
-        mainHandler.postDelayed(ttsRestartRunnable, TTS_RESTART_MS * engineFailureCount)
-    }
-
-    private fun postUtteranceFinished(
-        id: String?, generation: Int, failed: Boolean, reason: String
-    ): Unit {
-        mainHandler.post {
-            if (destroyed || generation != ttsGeneration) return@post
-            if (id == null || announcements.activeUtteranceId != id) return@post
-            clearSpeechWatchdog()
-            if (failed) {
-                recoverFailedUtterance(id, reason)
-            } else if (announcements.complete(id)) {
-                reportStatus("Announcement completed")
-                if (announcements.hasQueued) scheduleNextAnnouncement() else scheduleBatchCompletion()
-            }
-        }
-    }
-
-    private fun onUtteranceStarted(id: String?) {
-        if (id == null || id != announcements.activeUtteranceId) return
-        reportStatus("Speaking announcement")
-        // Startup watchdog is replaced with a duration-dependent *completion* watchdog.
-        // It must accommodate large spoken messages without timing out normal TTS.
-        val maximumDuration = (
-            TTS_COMPLETION_BASE_MS + announcements.activeTextLength * TTS_MS_PER_CHARACTER
-        ).coerceIn(TTS_MIN_COMPLETION_MS, TTS_MAX_COMPLETION_MS)
-        watchUtterance(id, maximumDuration)
-    }
-
-    private fun watchUtterance(id: String, delayMs: Long) {
-        clearSpeechWatchdog()
-        val generation = ttsGeneration
-        val runnable = Runnable {
-            if (!destroyed && generation == ttsGeneration && announcements.activeUtteranceId == id) {
-                recoverFailedUtterance(id, "TTS timed out (no progress callback)")
-            }
-        }
-        activeSpeechWatchdog = runnable
-        mainHandler.postDelayed(runnable, delayMs)
-    }
-
-    private fun clearSpeechWatchdog() {
-        activeSpeechWatchdog?.let { mainHandler.removeCallbacks(it) }
-        activeSpeechWatchdog = null
-    }
-
-    private fun recoverFailedUtterance(id: String, reason: String) {
-        if (announcements.activeUtteranceId != id) return
-        clearSpeechWatchdog()
-        val retry = announcements.retry(id)
-        reportStatus(if (retry) "$reason; retrying with a new speech engine" else "$reason; skipping after retry")
-        // A stuck TTS binder needs re-creation; a retry using the same engine can hang too.
-        ttsReady = false
-        ttsGeneration++ // stale TTS callbacks cannot complete the replacement utterance
-        tts?.stop()
-        if (!retry && !announcements.hasQueued) {
-            tts?.shutdown()
-            tts = null
-            scheduleBatchCompletion()
-        } else {
-            // Recovery occurs with the previous audio focus/session still held.
-            restartTtsEngine(reason)
         }
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?, rankingMap: RankingMap?) {
-        if (Looper.myLooper() != Looper.getMainLooper()) {
-            mainHandler.post { if (!destroyed) onNotificationPosted(sbn, rankingMap) }
-            return
-        }
-        if (destroyed || sbn == null || sbn.packageName == packageName) return
+        if (sbn == null) return
+        if (sbn.packageName == packageName) return
         if (!isNonSilent(sbn, rankingMap)) return
+
         NotificationSettingsStore.updateAppLastSeen(this, sbn.packageName, System.currentTimeMillis())
         sendBroadcast(Intent(ACTION_APP_LIST_UPDATED).setPackage(packageName))
+
         if (!NotificationSettingsStore.isPackageEnabled(this, sbn.packageName)) return
         if (!NotificationSettingsStore.areAnnouncementsEnabled(this)) return
 
         val spokenText = extractNotificationText(sbn.notification)
         if (spokenText.isBlank()) return
-        if (NotificationPolicy.shouldFilterByFragments(
-                spokenText, NotificationSettingsStore.getExcludeFragments(this)
-            )
-        ) return
+
+        val excludeFragments = NotificationSettingsStore.getExcludeFragments(this)
+        if (NotificationPolicy.shouldFilterByFragments(spokenText, excludeFragments)) return
+
+        if (!ttsReady) return
 
         val appLabel = runCatching {
             packageManager.getApplicationLabel(
                 packageManager.getApplicationInfo(sbn.packageName, 0)
             ).toString()
         }.getOrElse { sbn.packageName }
-        queueAnnouncement("Announcement. $appLabel. $spokenText")
-    }
 
-    private fun queueAnnouncement(text: String) {
-        val firstPendingAnnouncement = !announcements.hasQueued
-        val firstInBurst = announcements.enqueue(text, audioManager?.isMusicActive == true)
-        lastNotificationUptime = SystemClock.uptimeMillis()
-        // Each new *pending group* gets its own bounded quiet window, even when
-        // previous announcements are still finishing in the same music session.
-        if (firstPendingAnnouncement) firstNotificationUptime = lastNotificationUptime
-        if (firstInBurst) suppressAutomaticResume = false
-        reportStatus("Announcement queued (${announcements.queuedCount} waiting)")
-        if (!ttsReady && tts == null && !engineRestartScheduled) {
-            engineFailureCount = 0
-            initializeTtsEngine()
-        }
-        if (!announcements.isSpeaking) scheduleNextAnnouncement()
-    }
-
-    private fun scheduleNextAnnouncement() {
-        mainHandler.removeCallbacks(startNextRunnable)
-        mainHandler.removeCallbacks(releaseFocusRunnable)
-        mainHandler.removeCallbacks(finalizeBatchRunnable)
-        if (destroyed || !announcements.hasQueued || announcements.isSpeaking || !ttsReady) return
-        val remaining = AnnouncementTiming.waitBeforeSpeaking(
-            firstNotificationUptime, lastNotificationUptime, SystemClock.uptimeMillis(),
-            NOTIFICATION_QUIET_MS, MAX_QUIET_WAIT_MS,
-        )
-        mainHandler.postDelayed(startNextRunnable, remaining)
-    }
-
-    private fun startNextAnnouncement() {
-        if (destroyed || !announcements.hasQueued || announcements.isSpeaking || !ttsReady) return
-        val remaining = AnnouncementTiming.waitBeforeSpeaking(
-            firstNotificationUptime, lastNotificationUptime, SystemClock.uptimeMillis(),
-            NOTIFICATION_QUIET_MS, MAX_QUIET_WAIT_MS,
-        )
-        if (remaining > 0L) {
-            mainHandler.postDelayed(startNextRunnable, remaining)
-            return
-        }
-        val manager = audioManager
-        // Do not speak private notifications into an ongoing call; retry when the call ends.
-        if (manager?.mode == AudioManager.MODE_IN_CALL ||
-            manager?.mode == AudioManager.MODE_IN_COMMUNICATION
-        ) {
-            reportStatus("Call or communication audio active; announcement deferred")
-            mainHandler.postDelayed(startNextRunnable, CALL_RECHECK_MS)
-            return
-        }
-        if (!audioPrepared) {
-            prepareAnnouncementAudio()
-            mainHandler.postDelayed(startNextRunnable, FOCUS_SETTLE_MS)
-            return
-        }
-
-        val id = UUID.randomUUID().toString()
-        val announcement = announcements.startNext(id) ?: return
+        beginAnnouncementAudio()
+        val announcement = "Announcement. $appLabel. $spokenText"
         val params = Bundle().apply {
             putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
+            putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
         }
-        reportStatus("Sending announcement to speech engine")
-        watchUtterance(id, TTS_START_TIMEOUT_MS)
-        val result = runCatching {
-            // Each request is isolated: no hidden TTS engine queue can hold an old utterance.
-            tts?.speak(announcement, TextToSpeech.QUEUE_FLUSH, params, id)
-        }.getOrNull()
-        if (result != TextToSpeech.SUCCESS) {
-            recoverFailedUtterance(id, "TTS rejected speech request")
+        val speakResult = tts?.speak(announcement, TextToSpeech.QUEUE_ADD, params, UUID.randomUUID().toString())
+        if (speakResult != TextToSpeech.SUCCESS) {
+            finishAnnouncementAudio()
         }
     }
 
-    private fun prepareAnnouncementAudio() {
-        val manager = audioManager
-        if (manager == null) {
-            reportStatus("Audio manager unavailable; announcing without audio focus")
-            audioPrepared = true
-            return
-        }
-        announcements.observeMusicBeforeSpeech(manager.isMusicActive)
-        val session = ++focusGeneration
-        val listener = AudioManager.OnAudioFocusChangeListener { change ->
-            if (change == AudioManager.AUDIOFOCUS_LOSS) {
-                mainHandler.post {
-                    if (!destroyed && session == focusGeneration && activeFocusRequest != null) {
-                        if (audioManager?.mode == AudioManager.MODE_IN_CALL ||
-                            audioManager?.mode == AudioManager.MODE_IN_COMMUNICATION
-                        ) {
-                            stopCurrentAnnouncements(restorePlayback = false)
-                            reportStatus("Speech stopped for a call or communication session")
-                        } else {
-                            // Do not throw away speech simply because another application
-                            // took focus. Continue the existing TTS request in best-effort
-                            // mode, and let its watchdog recover if audio output stalls.
-                            abandonAnnouncementAudioFocus()
-                            audioPrepared = true
-                            suppressAutomaticResume = true
-                            reportStatus("Audio focus lost; continuing speech without focus")
-                        }
-                    }
-                }
+    @Synchronized
+    private fun beginAnnouncementAudio() {
+        val manager = audioManager ?: return
+        val isFirstQueuedAnnouncement = pendingAnnouncementCount == 0
+        pendingAnnouncementCount += 1
+
+        if (isFirstQueuedAnnouncement) {
+            shouldResumeMusicAfterAnnouncement = manager.isMusicActive
+            if (shouldResumeMusicAfterAnnouncement) {
+                manager.dispatchMediaKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE))
+                manager.dispatchMediaKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE))
             }
-        }
-        val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    .setOnAudioFocusChangeListener { }
                     .build()
-            )
-            .setOnAudioFocusChangeListener(listener, mainHandler)
-            .build()
-        val granted = runCatching {
-            manager.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-        }.getOrDefault(false)
-        if (granted) {
-            activeFocusRequest = request
-        } else {
-            // Critical: loss of audio focus must never cause total loss of announcements.
-            // Try media PAUSE as a best-effort fallback. Some third-party players may ignore it.
-            reportStatus("Audio focus denied; using best-effort media pause for speech")
-        }
-        if (announcements.musicWasPlaying ||
-            NotificationSettingsStore.getMusicResumeMode(this) != MusicResumeMode.AUTOMATIC
-        ) dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
-        audioPrepared = true
-    }
-
-    private fun scheduleBatchCompletion() {
-        clearSpeechWatchdog()
-        mainHandler.removeCallbacks(startNextRunnable)
-        mainHandler.removeCallbacks(releaseFocusRunnable)
-        mainHandler.removeCallbacks(finalizeBatchRunnable)
-        mainHandler.postDelayed(releaseFocusRunnable, BATCH_GRACE_MS)
-    }
-
-    private fun beginBatchCompletion() {
-        if (announcements.isSpeaking || announcements.hasQueued || !announcements.sessionOpen) return
-        abandonAnnouncementAudioFocus()
-        audioPrepared = false
-        if (NotificationSettingsStore.getMusicResumeMode(this) == MusicResumeMode.NEVER) {
-            dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
-        }
-        mainHandler.postDelayed(finalizeBatchRunnable, FOCUS_RELEASE_SETTLE_MS)
-    }
-
-    private fun finalizeBatchCompletion() {
-        if (announcements.isSpeaking || announcements.hasQueued || !announcements.sessionOpen) return
-        applyPlaybackResumeMode(announcements.musicWasPlaying)
-        announcements.cancel()
-        suppressAutomaticResume = false
-        engineFailureCount = 0
-        reportStatus(if (ttsReady) "Ready to announce notifications" else "Speech engine unavailable; the next notification will trigger recovery")
-    }
-
-    private fun applyPlaybackResumeMode(wasMusicPlaying: Boolean) {
-        when (NotificationSettingsStore.getMusicResumeMode(this)) {
-            MusicResumeMode.ALWAYS -> dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
-            MusicResumeMode.NEVER -> dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
-            MusicResumeMode.AUTOMATIC -> {
-                if (!suppressAutomaticResume && wasMusicPlaying && audioManager?.isMusicActive != true) {
-                    dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
+                if (manager.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                    activeFocusRequest = request
                 }
+            } else {
+                @Suppress("DEPRECATION")
+                manager.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
             }
         }
     }
 
-    private fun stopCurrentAnnouncements(restorePlayback: Boolean = true) {
-        mainHandler.removeCallbacks(startNextRunnable)
-        mainHandler.removeCallbacks(releaseFocusRunnable)
-        mainHandler.removeCallbacks(finalizeBatchRunnable)
-        clearSpeechWatchdog()
-        val wasPlaying = announcements.musicWasPlaying
-        val hadSession = announcements.sessionOpen
-        announcements.cancel()
-        tts?.stop()
+    @Synchronized
+    private fun finishAnnouncementAudio() {
+        if (pendingAnnouncementCount > 0) {
+            pendingAnnouncementCount -= 1
+        }
+        if (pendingAnnouncementCount > 0) return
+
         abandonAnnouncementAudioFocus()
-        audioPrepared = false
-        if (hadSession && restorePlayback) applyPlaybackResumeMode(wasPlaying)
-        suppressAutomaticResume = false
+        if (shouldResumeMusicAfterAnnouncement) {
+            audioManager?.dispatchMediaKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_MEDIA_PLAY))
+            audioManager?.dispatchMediaKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_MEDIA_PLAY))
+            shouldResumeMusicAfterAnnouncement = false
+        }
+    }
+
+    @Synchronized
+    private fun stopCurrentAnnouncements() {
+        tts?.stop()
+        pendingAnnouncementCount = 0
+        finishAnnouncementAudio()
     }
 
     private fun abandonAnnouncementAudioFocus() {
-        focusGeneration++
-        val request = activeFocusRequest ?: return
-        activeFocusRequest = null
-        audioManager?.abandonAudioFocusRequest(request)
-    }
-
-    private fun dispatchMediaKey(keyCode: Int) {
         val manager = audioManager ?: return
-        manager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
-        manager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
-    }
-
-    private fun reportStatus(message: String) {
-        Log.i(TAG, message)
-        NotificationSettingsStore.setSpeechStatus(this, message)
-        sendBroadcast(Intent(ACTION_APP_LIST_UPDATED).setPackage(packageName))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            activeFocusRequest?.let { manager.abandonAudioFocusRequest(it) }
+            activeFocusRequest = null
+        } else {
+            @Suppress("DEPRECATION")
+            manager.abandonAudioFocus(null)
+        }
     }
 
     private fun isNonSilent(
@@ -551,22 +238,6 @@ class NotificationAnnouncerService : NotificationListenerService() {
     }
 
     companion object {
-        private const val TAG = "NotificationAnnouncer"
-        private const val NOTIFICATION_QUIET_MS = 3_000L
-        private const val MAX_QUIET_WAIT_MS = 6_000L
-        private const val BATCH_GRACE_MS = 1_500L
-        private const val FOCUS_SETTLE_MS = 350L
-        private const val FOCUS_RELEASE_SETTLE_MS = 350L
-        private const val MAX_ENGINE_RESTARTS = 3
-        private const val TTS_INIT_TIMEOUT_MS = 12_000L
-        private const val TTS_RESTART_MS = 1_500L
-        private const val TTS_START_TIMEOUT_MS = 12_000L
-        private const val TTS_COMPLETION_BASE_MS = 15_000L
-        private const val TTS_MIN_COMPLETION_MS = 30_000L
-        private const val TTS_MAX_COMPLETION_MS = 600_000L
-        private const val TTS_MS_PER_CHARACTER = 120L
-        private const val CALL_RECHECK_MS = 3_000L
-        const val ACTION_TEST_ANNOUNCEMENT = "com.hdclark.notificationannouncer.TEST_ANNOUNCEMENT"
         const val ACTION_APP_LIST_UPDATED = "com.hdclark.notificationannouncer.APP_LIST_UPDATED"
         const val ACTION_TOGGLE_ANNOUNCEMENTS = "com.hdclark.notificationannouncer.TOGGLE_ANNOUNCEMENTS"
         const val ACTION_ANNOUNCEMENTS_TOGGLED = "com.hdclark.notificationannouncer.ANNOUNCEMENTS_TOGGLED"

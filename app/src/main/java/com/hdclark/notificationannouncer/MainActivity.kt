@@ -8,7 +8,6 @@ import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Toast
 import android.content.pm.PackageManager
@@ -45,31 +44,6 @@ class MainActivity : AppCompatActivity() {
             refreshData()
         }
 
-        val resumeModes = MusicResumeMode.entries
-        val resumeModeAdapter = ArrayAdapter.createFromResource(
-            this,
-            R.array.music_resume_mode_options,
-            android.R.layout.simple_spinner_item,
-        ).apply {
-            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        }
-        binding.musicResumeModeSpinner.adapter = resumeModeAdapter
-        binding.musicResumeModeSpinner.setSelection(
-            resumeModes.indexOf(NotificationSettingsStore.getMusicResumeMode(this))
-        )
-        binding.musicResumeModeSpinner.onItemSelectedListener =
-            object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(
-                    parent: AdapterView<*>?, view: android.view.View?, position: Int, id: Long
-                ) {
-                    NotificationSettingsStore.setMusicResumeMode(
-                        this@MainActivity, resumeModes[position]
-                    )
-                }
-
-                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
-            }
-
         binding.appsRecyclerView.layoutManager = LinearLayoutManager(this)
         binding.appsRecyclerView.adapter = appSettingsAdapter
 
@@ -92,13 +66,6 @@ class MainActivity : AppCompatActivity() {
             NotificationSettingsStore.removeExcludeFragment(this, value)
             refreshData()
             true
-        }
-
-        binding.testSpeechButton.setOnClickListener {
-            sendBroadcast(
-                Intent(NotificationAnnouncerService.ACTION_TEST_ANNOUNCEMENT).setPackage(packageName)
-            )
-            Toast.makeText(this, R.string.test_speech_button, Toast.LENGTH_SHORT).show()
         }
 
         binding.notificationAccessButton.setOnClickListener {
@@ -132,7 +99,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshData() {
-        binding.speechStatus.text = NotificationSettingsStore.getSpeechStatus(this)
         val packageManager = packageManager
         val appStates = NotificationSettingsStore.getAppLastSeen(this)
 

@@ -20,14 +20,4 @@
     <string name="announcements_off">Announcements are paused</string>
     <string name="pause_announcements">Pause</string>
     <string name="resume_announcements">Resume</string>
-    <string name="music_resume_mode_title">Music playback after announcements</string>
-    <string name="music_resume_mode_description">The app waits for notification sounds to finish before speaking. Automatic restores music only if it was playing before the announcement burst. Always resume and Never resume override detection.</string>
-    <string-array name="music_resume_mode_options">
-        <item>Automatic (detect prior playback)</item>
-        <item>Always resume music</item>
-        <item>Never resume music</item>
-    </string-array>
-    <string name="speech_diagnostics_title">Speech engine diagnostics</string>
-    <string name="speech_diagnostics_waiting">Waiting for speech status…</string>
-    <string name="test_speech_button">Test announcement</string>
 </resources>
