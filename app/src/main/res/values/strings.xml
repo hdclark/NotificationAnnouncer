@@ -27,6 +27,30 @@
         <item>Always resume music</item>
         <item>Never resume music</item>
     </string-array>
+    <string name="speech_settings_title">Speech customization</string>
+    <string name="speech_rate_title">Speech speed</string>
+    <string name="speech_pitch_title">Speech pitch</string>
+    <string name="speech_default_multiplier">1.0×</string>
+    <string name="speech_multiplier_value">%1$.1f×</string>
+    <string name="speech_repetitions_title">Repeat each announcement</string>
+    <string name="speech_repetitions_description">Repeats are part of the same spoken announcement, keeping music paused until it finishes. Long messages may repeat fewer times to stay within TTS limits.</string>
+    <string-array name="speech_repetition_options">
+        <item>Once</item>
+        <item>Twice</item>
+        <item>3 times</item>
+        <item>4 times</item>
+        <item>5 times</item>
+    </string-array>
+    <string name="first_notification_delay_title">Minimum wait after first queued notification</string>
+    <string name="first_notification_delay_description">0 seconds keeps the existing 3-second quiet window and 6-second cap. A longer minimum wait begins with the first queued notification in each pending group; newer messages do not restart it.</string>
+    <string-array name="first_notification_delay_options">
+        <item>0 seconds (original timing)</item>
+        <item>1 second</item>
+        <item>2 seconds</item>
+        <item>3 seconds</item>
+        <item>5 seconds</item>
+        <item>10 seconds</item>
+    </string-array>
     <string name="speech_diagnostics_title">Speech engine diagnostics</string>
     <string name="speech_diagnostics_waiting">Waiting for speech status…</string>
     <string name="test_speech_button">Test announcement</string>
