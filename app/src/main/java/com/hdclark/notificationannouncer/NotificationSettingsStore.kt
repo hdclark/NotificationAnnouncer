@@ -10,6 +10,10 @@ object NotificationSettingsStore {
     private const val KEY_APP_LAST_SEEN = "app_last_seen"
     private const val KEY_ANNOUNCEMENTS_ENABLED = "announcements_enabled"
     private const val KEY_MUSIC_RESUME_MODE = "music_resume_mode"
+    private const val KEY_SPEECH_RATE = "speech_rate"
+    private const val KEY_SPEECH_PITCH = "speech_pitch"
+    private const val KEY_SPEECH_REPETITIONS = "speech_repetitions"
+    private const val KEY_FIRST_NOTIFICATION_DELAY_SECONDS = "first_notification_delay_seconds"
     private const val KEY_SPEECH_STATUS = "speech_status"
     private const val KEY_SPEECH_STATUS_TIME = "speech_status_time"
 
@@ -58,6 +62,44 @@ object NotificationSettingsStore {
 
     fun setMusicResumeMode(context: Context, mode: MusicResumeMode) {
         prefs(context).edit().putString(KEY_MUSIC_RESUME_MODE, mode.storedValue).apply()
+    }
+
+    // Defaults intentionally preserve existing speech and scheduling behaviour.
+    fun getSpeechRate(context: Context): Float =
+        SpeechCustomization.boundedMultiplier(prefs(context).getFloat(KEY_SPEECH_RATE, 1.0f))
+
+    fun setSpeechRate(context: Context, rate: Float) {
+        prefs(context).edit()
+            .putFloat(KEY_SPEECH_RATE, SpeechCustomization.boundedMultiplier(rate)).apply()
+    }
+
+    fun getSpeechPitch(context: Context): Float =
+        SpeechCustomization.boundedMultiplier(prefs(context).getFloat(KEY_SPEECH_PITCH, 1.0f))
+
+    fun setSpeechPitch(context: Context, pitch: Float) {
+        prefs(context).edit()
+            .putFloat(KEY_SPEECH_PITCH, SpeechCustomization.boundedMultiplier(pitch)).apply()
+    }
+
+    fun getSpeechRepetitions(context: Context): Int =
+        prefs(context).getInt(KEY_SPEECH_REPETITIONS, 1)
+            .coerceIn(1, SpeechCustomization.MAX_REPETITIONS)
+
+    fun setSpeechRepetitions(context: Context, repetitions: Int) {
+        prefs(context).edit()
+            .putInt(KEY_SPEECH_REPETITIONS, repetitions.coerceIn(1, SpeechCustomization.MAX_REPETITIONS))
+            .apply()
+    }
+
+    fun getFirstNotificationDelaySeconds(context: Context): Int =
+        prefs(context).getInt(KEY_FIRST_NOTIFICATION_DELAY_SECONDS, 0)
+            .takeIf { it in SpeechCustomization.DELAY_OPTIONS_SECONDS } ?: 0
+
+    fun setFirstNotificationDelaySeconds(context: Context, seconds: Int) {
+        prefs(context).edit()
+            .putInt(KEY_FIRST_NOTIFICATION_DELAY_SECONDS,
+                seconds.takeIf { it in SpeechCustomization.DELAY_OPTIONS_SECONDS } ?: 0)
+            .apply()
     }
 
     fun getExcludeFragments(context: Context): List<String> {
