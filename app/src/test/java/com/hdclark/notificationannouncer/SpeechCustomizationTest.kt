@@ -51,10 +51,10 @@ class SpeechCustomizationTest {
 
     @Test
     fun speechMultipliersAreBoundedAndNonfiniteValuesResetToNormal() {
-        assertEquals(0.5f, SpeechCustomization.boundedMultiplier(0.1f))
-        assertEquals(2.0f, SpeechCustomization.boundedMultiplier(5.0f))
-        assertEquals(1.0f, SpeechCustomization.boundedMultiplier(Float.NaN))
-        assertEquals(1.0f, SpeechCustomization.boundedMultiplier(Float.POSITIVE_INFINITY))
+        assertEquals(0.5f, SpeechCustomization.boundedMultiplier(0.1f), 0.0001f)
+        assertEquals(2.0f, SpeechCustomization.boundedMultiplier(5.0f), 0.0001f)
+        assertEquals(1.0f, SpeechCustomization.boundedMultiplier(Float.NaN), 0.0001f)
+        assertEquals(1.0f, SpeechCustomization.boundedMultiplier(Float.POSITIVE_INFINITY), 0.0001f)
     }
 
     @Test
