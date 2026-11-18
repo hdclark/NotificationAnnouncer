@@ -1,9 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="16dp">
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
 
     <TextView
         android:layout_width="match_parent"
@@ -49,7 +54,90 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
+        android:layout_marginTop="24dp"
+        android:text="@string/speech_settings_title"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="@string/speech_rate_title" />
+
+    <TextView
+        android:id="@+id/speechRateValue"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/speech_default_multiplier" />
+
+    <SeekBar
+        android:id="@+id/speechRateSeekBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:max="15"
+        android:progress="5"
+        android:contentDescription="@string/speech_rate_title" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="@string/speech_pitch_title" />
+
+    <TextView
+        android:id="@+id/speechPitchValue"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/speech_default_multiplier" />
+
+    <SeekBar
+        android:id="@+id/speechPitchSeekBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:max="15"
+        android:progress="5"
+        android:contentDescription="@string/speech_pitch_title" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="@string/speech_repetitions_title" />
+
+    <Spinner
+        android:id="@+id/speechRepetitionsSpinner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:contentDescription="@string/speech_repetitions_title" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/speech_repetitions_description" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="@string/first_notification_delay_title" />
+
+    <Spinner
+        android:id="@+id/firstNotificationDelaySpinner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:contentDescription="@string/first_notification_delay_title" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/first_notification_delay_description" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
         android:text="@string/music_resume_mode_title"
         android:textStyle="bold" />
 
@@ -102,8 +190,9 @@
     <ListView
         android:id="@+id/excludeFiltersList"
         android:layout_width="match_parent"
-        android:layout_height="120dp"
-        android:layout_marginTop="4dp" />
+        android:layout_height="160dp"
+        android:layout_marginTop="8dp"
+        android:nestedScrollingEnabled="true" />
 
     <TextView
         android:layout_width="match_parent"
@@ -115,8 +204,11 @@
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/appsRecyclerView"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:layout_marginTop="8dp" />
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:paddingBottom="24dp"
+        android:clipToPadding="false"
+        android:nestedScrollingEnabled="false" />
 
-</LinearLayout>
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>

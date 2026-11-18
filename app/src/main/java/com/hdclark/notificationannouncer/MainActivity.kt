@@ -11,6 +11,9 @@ import android.provider.Settings
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Toast
+import android.widget.SeekBar
+import android.widget.TextView
+import kotlin.math.roundToInt
 import android.content.pm.PackageManager
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -64,6 +67,59 @@ class MainActivity : AppCompatActivity() {
                 ) {
                     NotificationSettingsStore.setMusicResumeMode(
                         this@MainActivity, resumeModes[position]
+                    )
+                }
+
+                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            }
+
+        configureSpeechSlider(
+            binding.speechRateSeekBar,
+            binding.speechRateValue,
+            NotificationSettingsStore.getSpeechRate(this)
+        ) { NotificationSettingsStore.setSpeechRate(this, it) }
+        configureSpeechSlider(
+            binding.speechPitchSeekBar,
+            binding.speechPitchValue,
+            NotificationSettingsStore.getSpeechPitch(this)
+        ) { NotificationSettingsStore.setSpeechPitch(this, it) }
+
+        val repetitionOptions = (1..SpeechCustomization.MAX_REPETITIONS).toList()
+        binding.speechRepetitionsSpinner.adapter = ArrayAdapter.createFromResource(
+            this, R.array.speech_repetition_options, android.R.layout.simple_spinner_item
+        ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        binding.speechRepetitionsSpinner.setSelection(
+            repetitionOptions.indexOf(NotificationSettingsStore.getSpeechRepetitions(this))
+        )
+        binding.speechRepetitionsSpinner.onItemSelectedListener =
+            object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(
+                    parent: AdapterView<*>?, view: android.view.View?, position: Int, id: Long
+                ) {
+                    NotificationSettingsStore.setSpeechRepetitions(
+                        this@MainActivity, repetitionOptions[position]
+                    )
+                }
+
+                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            }
+
+        val delayOptions = SpeechCustomization.DELAY_OPTIONS_SECONDS
+        binding.firstNotificationDelaySpinner.adapter = ArrayAdapter.createFromResource(
+            this, R.array.first_notification_delay_options, android.R.layout.simple_spinner_item
+        ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        binding.firstNotificationDelaySpinner.setSelection(
+            delayOptions.indexOf(
+                NotificationSettingsStore.getFirstNotificationDelaySeconds(this)
+            ).coerceAtLeast(0)
+        )
+        binding.firstNotificationDelaySpinner.onItemSelectedListener =
+            object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(
+                    parent: AdapterView<*>?, view: android.view.View?, position: Int, id: Long
+                ) {
+                    NotificationSettingsStore.setFirstNotificationDelaySeconds(
+                        this@MainActivity, delayOptions[position]
                     )
                 }
 
@@ -129,6 +185,27 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refreshData()
+    }
+
+    private fun configureSpeechSlider(
+        slider: SeekBar,
+        valueLabel: TextView,
+        initial: Float,
+        save: (Float) -> Unit,
+    ) {
+        slider.max = 15 // 0.5x to 2.0x, in 0.1 increments
+        slider.progress = ((initial - 0.5f) * 10).roundToInt().coerceIn(0, 15)
+        valueLabel.text = getString(R.string.speech_multiplier_value, 0.5f + slider.progress / 10f)
+        slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val multiplier = 0.5f + progress / 10f
+                valueLabel.text = getString(R.string.speech_multiplier_value, multiplier)
+                if (fromUser) save(multiplier)
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+        })
     }
 
     private fun refreshData() {

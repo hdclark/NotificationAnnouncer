@@ -34,6 +34,9 @@ class NotificationAnnouncerService : NotificationListenerService() {
     private val announcements = AnnouncementPlaybackQueue()
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+    // Avoid changing speech-engine settings when the user leaves the defaults unchanged.
+    private var appliedSpeechRate = 1.0f
+    private var appliedSpeechPitch = 1.0f
     private var ttsGeneration = 0
     private var engineFailureCount = 0
     private var engineRestartScheduled = false
@@ -219,6 +222,8 @@ class NotificationAnnouncerService : NotificationListenerService() {
             restartTtsEngine("Could not configure speech engine")
             return
         }
+        appliedSpeechRate = 1.0f
+        appliedSpeechPitch = 1.0f
         ttsReady = true
         engineFailureCount = 0
         reportStatus("Speech engine ready")
@@ -339,7 +344,11 @@ class NotificationAnnouncerService : NotificationListenerService() {
 
     private fun queueAnnouncement(text: String) {
         val firstPendingAnnouncement = !announcements.hasQueued
-        val firstInBurst = announcements.enqueue(text, audioManager?.isMusicActive == true)
+        // Repeats stay inside one utterance; queue lifecycle and music hold are unchanged.
+        val spokenText = SpeechCustomization.repeatAnnouncement(
+            text, NotificationSettingsStore.getSpeechRepetitions(this)
+        )
+        val firstInBurst = announcements.enqueue(spokenText, audioManager?.isMusicActive == true)
         lastNotificationUptime = SystemClock.uptimeMillis()
         // Each new *pending group* gets its own bounded quiet window, even when
         // previous announcements are still finishing in the same music session.
@@ -358,19 +367,30 @@ class NotificationAnnouncerService : NotificationListenerService() {
         mainHandler.removeCallbacks(releaseFocusRunnable)
         mainHandler.removeCallbacks(finalizeBatchRunnable)
         if (destroyed || !announcements.hasQueued || announcements.isSpeaking || !ttsReady) return
-        val remaining = AnnouncementTiming.waitBeforeSpeaking(
-            firstNotificationUptime, lastNotificationUptime, SystemClock.uptimeMillis(),
+        val remaining = remainingBeforeSpeaking()
+        mainHandler.postDelayed(startNextRunnable, remaining)
+    }
+
+    private fun remainingBeforeSpeaking(): Long {
+        val now = SystemClock.uptimeMillis()
+        val originalWait = AnnouncementTiming.waitBeforeSpeaking(
+            firstNotificationUptime, lastNotificationUptime, now,
             NOTIFICATION_QUIET_MS, MAX_QUIET_WAIT_MS,
         )
-        mainHandler.postDelayed(startNextRunnable, remaining)
+        val delaySeconds = NotificationSettingsStore.getFirstNotificationDelaySeconds(this)
+        // Zero is a strict no-op: retain the original quiet-window / maximum-wait policy.
+        if (delaySeconds == 0) return originalWait
+        return maxOf(
+            originalWait,
+            SpeechCustomization.additionalWait(
+                firstNotificationUptime, now, delaySeconds * 1_000L
+            )
+        )
     }
 
     private fun startNextAnnouncement() {
         if (destroyed || !announcements.hasQueued || announcements.isSpeaking || !ttsReady) return
-        val remaining = AnnouncementTiming.waitBeforeSpeaking(
-            firstNotificationUptime, lastNotificationUptime, SystemClock.uptimeMillis(),
-            NOTIFICATION_QUIET_MS, MAX_QUIET_WAIT_MS,
-        )
+        val remaining = remainingBeforeSpeaking()
         if (remaining > 0L) {
             mainHandler.postDelayed(startNextRunnable, remaining)
             return
@@ -399,9 +419,21 @@ class NotificationAnnouncerService : NotificationListenerService() {
         }
         reportStatus("Sending announcement to speech engine")
         watchUtterance(id, TTS_START_TIMEOUT_MS)
+        val engine = tts
+        val selectedRate = NotificationSettingsStore.getSpeechRate(this)
+        val selectedPitch = NotificationSettingsStore.getSpeechPitch(this)
         val result = runCatching {
+            // Set only changed values; an unconfigured app makes no extra TTS engine calls.
+            if (selectedRate != appliedSpeechRate) {
+                check(engine?.setSpeechRate(selectedRate) == TextToSpeech.SUCCESS)
+                appliedSpeechRate = selectedRate
+            }
+            if (selectedPitch != appliedSpeechPitch) {
+                check(engine?.setPitch(selectedPitch) == TextToSpeech.SUCCESS)
+                appliedSpeechPitch = selectedPitch
+            }
             // Each request is isolated: no hidden TTS engine queue can hold an old utterance.
-            tts?.speak(announcement, TextToSpeech.QUEUE_FLUSH, params, id)
+            engine?.speak(announcement, TextToSpeech.QUEUE_FLUSH, params, id)
         }.getOrNull()
         if (result != TextToSpeech.SUCCESS) {
             recoverFailedUtterance(id, "TTS rejected speech request")
