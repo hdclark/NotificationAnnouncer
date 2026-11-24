@@ -7,6 +7,26 @@ Android app that reads non-silent notifications aloud in the background using Te
 Developers should use GitHub Actions CI to build APKs. The workflow in `.github/workflows/android-ci.yml` runs unit tests, assembles `app-debug.apk`, and uploads the APK as a workflow artifact.
 
 
+## Automatic Bluetooth audio control
+
+Enable **Automatic Bluetooth audio control** in the main screen to announce only
+when Bluetooth media audio is available. Disconnecting stops ongoing speech and
+discards pending announcements; reconnecting enables new notifications (no replay).
+The ongoing control notification displays the automatic state. Turn the setting
+off to restore the previous manual Pause/Resume state. Existing installations
+default to manual mode.
+
+The listener observes Android audio outputs rather than generic Bluetooth
+connections, with a route recheck before speech and periodic rechecks only in
+automatic mode. No Bluetooth discovery or Nearby Devices permission is needed.
+On Android 13+ the expected routing of the existing TTS audio attributes must
+be exclusively Bluetooth; on older Android the public API only provides the
+connected-output fallback. Bluetooth speakers/car audio can qualify as well as
+headphones. This is best-effort protection, not a guarantee: system/engine
+routing and asynchronous disconnects may expose a brief part of an utterance.
+
+See [Bluetooth regression checklist](docs/bluetooth-auto-control-regression.md).
+
 ## Music interruption and de-sync prevention
 
 Notifications are announced serially as one **burst**. A 3-second quiet window, measured

@@ -48,6 +48,16 @@ class MainActivity : AppCompatActivity() {
             refreshData()
         }
 
+        binding.bluetoothAutoControlSwitch.isChecked =
+            NotificationSettingsStore.isBluetoothAutoControlEnabled(this)
+        binding.bluetoothAutoControlSwitch.setOnCheckedChangeListener { _, automatic ->
+            NotificationSettingsStore.setBluetoothAutoControlEnabled(this, automatic)
+            sendBroadcast(
+                Intent(NotificationAnnouncerService.ACTION_ANNOUNCEMENTS_TOGGLED).setPackage(packageName)
+            )
+            startAnnouncementControlService()
+        }
+
         val resumeModes = MusicResumeMode.entries
         val resumeModeAdapter = ArrayAdapter.createFromResource(
             this,

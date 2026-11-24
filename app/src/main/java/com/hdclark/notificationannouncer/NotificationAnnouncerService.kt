@@ -11,6 +11,8 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.IntentFilter
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
@@ -81,12 +83,65 @@ class NotificationAnnouncerService : NotificationListenerService() {
     }
     private var activeSpeechWatchdog: Runnable? = null
 
+    // Observe audio outputs, not generic Bluetooth pairing/ACL connections.
+    // All callbacks are delivered on the same looper as the existing queue.
+    private var lastBluetoothEnabled: Boolean? = null
+    private var audioDeviceCallbackRegistered = false
+    private val bluetoothRouteRecheck = Runnable { refreshBluetoothControl() }
+    private val audioDeviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+            refreshBluetoothControl()
+        }
+
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+            // Cancel conservatively on loss of a Bluetooth media output, even if
+            // Android has not yet updated its reported route or another is connected.
+            if (!destroyed && NotificationSettingsStore.isBluetoothAutoControlEnabled(this@NotificationAnnouncerService) &&
+                removedDevices.any { BluetoothAnnouncementPolicy.isBluetoothMediaOutput(it.type) } &&
+                announcements.sessionOpen
+            ) {
+                stopCurrentAnnouncements()
+            }
+            refreshBluetoothControl()
+        }
+    }
+
+    private fun refreshBluetoothControl() {
+        mainHandler.removeCallbacks(bluetoothRouteRecheck)
+        if (destroyed) return
+        if (!NotificationSettingsStore.isBluetoothAutoControlEnabled(this)) {
+            if (lastBluetoothEnabled != null) {
+                lastBluetoothEnabled = null
+                updateControlNotification()
+            }
+            return
+        }
+        val enabled = NotificationSettingsStore.areAnnouncementsEnabled(this)
+        if (!enabled && announcements.sessionOpen) stopCurrentAnnouncements()
+        if (lastBluetoothEnabled != enabled) {
+            lastBluetoothEnabled = enabled
+            updateControlNotification()
+            reportStatus(if (enabled) "Bluetooth audio available; announcements enabled"
+                else "Bluetooth audio unavailable; announcements paused")
+        }
+        // Device callbacks do not cover every output-selector change. No wake lock;
+        // this runs only in automatic mode and does not schedule any utterances.
+        mainHandler.postDelayed(bluetoothRouteRecheck, BLUETOOTH_ROUTE_RECHECK_MS)
+    }
+
     private val announcementToggleReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
                 ACTION_ANNOUNCEMENTS_TOGGLED -> {
                     if (!NotificationSettingsStore.areAnnouncementsEnabled(this@NotificationAnnouncerService)) {
                         stopCurrentAnnouncements()
+                    }
+                    refreshBluetoothControl()
+                }
+                AudioManager.ACTION_AUDIO_BECOMING_NOISY -> {
+                    if (NotificationSettingsStore.isBluetoothAutoControlEnabled(this@NotificationAnnouncerService)) {
+                        if (announcements.sessionOpen) stopCurrentAnnouncements()
+                        refreshBluetoothControl()
                     }
                 }
                 ACTION_TEST_ANNOUNCEMENT -> {
@@ -110,9 +165,16 @@ class NotificationAnnouncerService : NotificationListenerService() {
             IntentFilter().apply {
                 addAction(ACTION_ANNOUNCEMENTS_TOGGLED)
                 addAction(ACTION_TEST_ANNOUNCEMENT)
+                addAction(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
             },
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
+        audioDeviceCallbackRegistered = runCatching {
+            val manager = audioManager ?: return@runCatching false
+            manager.registerAudioDeviceCallback(audioDeviceCallback, mainHandler)
+            true
+        }.getOrDefault(false)
+        refreshBluetoothControl()
         reportStatus("Notification listener starting; initializing speech engine")
         initializeTtsEngine()
     }
@@ -121,6 +183,10 @@ class NotificationAnnouncerService : NotificationListenerService() {
         destroyed = true
         ttsGeneration++ // invalidate old engine callbacks
         runCatching { unregisterReceiver(announcementToggleReceiver) }
+        mainHandler.removeCallbacks(bluetoothRouteRecheck)
+        if (audioDeviceCallbackRegistered) {
+            runCatching { audioManager?.unregisterAudioDeviceCallback(audioDeviceCallback) }
+        }
         stopCurrentAnnouncements()
         mainHandler.removeCallbacks(ttsRestartRunnable)
         mainHandler.removeCallbacks(ttsInitWatchdogRunnable)
@@ -133,6 +199,7 @@ class NotificationAnnouncerService : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        refreshBluetoothControl()
         updateControlNotification()
         reportStatus(if (ttsReady) "Ready to announce notifications" else "Listener connected; speech engine initializing")
     }
@@ -390,6 +457,14 @@ class NotificationAnnouncerService : NotificationListenerService() {
 
     private fun startNextAnnouncement() {
         if (destroyed || !announcements.hasQueued || announcements.isSpeaking || !ttsReady) return
+        // Recheck immediately before the original scheduling/audio path, including
+        // the invocation after focus settling. Never change the manual-mode path.
+        if (NotificationSettingsStore.isBluetoothAutoControlEnabled(this) &&
+            !NotificationSettingsStore.areAnnouncementsEnabled(this)
+        ) {
+            refreshBluetoothControl()
+            return
+        }
         val remaining = remainingBeforeSpeaking()
         if (remaining > 0L) {
             mainHandler.postDelayed(startNextRunnable, remaining)
@@ -625,6 +700,7 @@ class NotificationAnnouncerService : NotificationListenerService() {
         private const val TTS_MAX_COMPLETION_MS = 600_000L
         private const val TTS_MS_PER_CHARACTER = 120L
         private const val CALL_RECHECK_MS = 3_000L
+        private const val BLUETOOTH_ROUTE_RECHECK_MS = 1_000L
         const val ACTION_TEST_ANNOUNCEMENT = "com.hdclark.notificationannouncer.TEST_ANNOUNCEMENT"
         const val ACTION_APP_LIST_UPDATED = "com.hdclark.notificationannouncer.APP_LIST_UPDATED"
         const val ACTION_TOGGLE_ANNOUNCEMENTS = "com.hdclark.notificationannouncer.TOGGLE_ANNOUNCEMENTS"
@@ -654,6 +730,8 @@ class AnnouncementControlService : Service() {
 class AnnouncementToggleReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent?.action != NotificationAnnouncerService.ACTION_TOGGLE_ANNOUNCEMENTS) return
+        // Stale notification actions must not bypass automatic mode.
+        if (NotificationSettingsStore.isBluetoothAutoControlEnabled(context)) return
         val enabled = NotificationSettingsStore.areAnnouncementsEnabled(context)
         NotificationSettingsStore.setAnnouncementsEnabled(context, !enabled)
         ensureControlNotificationChannel(context)
@@ -693,17 +771,25 @@ private fun buildControlNotification(context: Context): Notification {
         Intent(context, AnnouncementToggleReceiver::class.java).setAction(NotificationAnnouncerService.ACTION_TOGGLE_ANNOUNCEMENTS),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
-    return NotificationCompat.Builder(context, NotificationAnnouncerService.CONTROL_NOTIFICATION_CHANNEL_ID)
+    val automatic = NotificationSettingsStore.isBluetoothAutoControlEnabled(context)
+    val builder = NotificationCompat.Builder(context, NotificationAnnouncerService.CONTROL_NOTIFICATION_CHANNEL_ID)
         .setSmallIcon(R.drawable.ic_notification_announcer)
         .setContentTitle(context.getString(R.string.control_notification_title))
-        .setContentText(context.getString(if (enabled) R.string.announcements_on else R.string.announcements_off))
+        .setContentText(context.getString(when {
+            automatic && enabled -> R.string.bluetooth_announcements_on
+            automatic -> R.string.bluetooth_announcements_off
+            enabled -> R.string.announcements_on
+            else -> R.string.announcements_off
+        }))
         .setOngoing(true)
         .setSilent(true)
         .setContentIntent(launchIntent)
-        .addAction(
+    if (!automatic) {
+        builder.addAction(
             android.R.drawable.ic_media_pause,
             context.getString(if (enabled) R.string.pause_announcements else R.string.resume_announcements),
             toggleIntent,
         )
-        .build()
+    }
+    return builder.build()
 }

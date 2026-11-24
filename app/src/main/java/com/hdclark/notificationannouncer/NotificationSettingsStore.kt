@@ -9,6 +9,7 @@ object NotificationSettingsStore {
     private const val KEY_EXCLUDE_FRAGMENTS = "exclude_fragments"
     private const val KEY_APP_LAST_SEEN = "app_last_seen"
     private const val KEY_ANNOUNCEMENTS_ENABLED = "announcements_enabled"
+    private const val KEY_BLUETOOTH_AUTO_CONTROL = "bluetooth_auto_control"
     private const val KEY_MUSIC_RESUME_MODE = "music_resume_mode"
     private const val KEY_SPEECH_RATE = "speech_rate"
     private const val KEY_SPEECH_PITCH = "speech_pitch"
@@ -49,7 +50,17 @@ object NotificationSettingsStore {
     }
 
     fun areAnnouncementsEnabled(context: Context): Boolean {
-        return prefs(context).getBoolean(KEY_ANNOUNCEMENTS_ENABLED, true)
+        return BluetoothAnnouncementPolicy.enabled(
+            manualEnabled = prefs(context).getBoolean(KEY_ANNOUNCEMENTS_ENABLED, true),
+            automatic = isBluetoothAutoControlEnabled(context),
+        ) { BluetoothAudioAvailability.isAvailable(context) }
+    }
+
+    fun isBluetoothAutoControlEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_BLUETOOTH_AUTO_CONTROL, false)
+
+    fun setBluetoothAutoControlEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_BLUETOOTH_AUTO_CONTROL, enabled).apply()
     }
 
     fun setAnnouncementsEnabled(context: Context, enabled: Boolean) {

@@ -16,6 +16,10 @@
     <string name="control_notification_channel_name">Announcement controls</string>
     <string name="control_notification_channel_description">Persistent controls for notification announcements.</string>
     <string name="control_notification_title">Notification announcements</string>
+    <string name="bluetooth_auto_control_title">Automatic Bluetooth audio control</string>
+    <string name="bluetooth_auto_control_description">Speak only when Bluetooth audio is available. Disconnecting stops speech and discards pending announcements. Turn this off to restore your previous manual setting and Pause/Resume controls. Bluetooth speakers may also qualify; on Android 12 and earlier, the active output cannot be verified. Routing changes may briefly leak speech.</string>
+    <string name="bluetooth_announcements_on">Bluetooth auto: announcements on</string>
+    <string name="bluetooth_announcements_off">Bluetooth auto: announcements paused</string>
     <string name="announcements_on">Announcements are on</string>
     <string name="announcements_off">Announcements are paused</string>
     <string name="pause_announcements">Pause</string>
